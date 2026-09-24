@@ -404,7 +404,7 @@ SDLInputManager::SDLInputManager(SDL_Window* window)
 {
 
     int32_t flags = SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER;
-#ifndef __WINRT__
+#if !defined(__WINRT__) && !defined(PS5_NATIVE_APP)
     flags |= SDL_INIT_HAPTIC;
 #endif
     if (SDL_Init(flags) < 0)
@@ -602,6 +602,15 @@ void SDLInputManager::runloopStart()
 
 void SDLInputManager::sendRumble(unsigned short controller, unsigned short lowFreqMotor, unsigned short highFreqMotor)
 {
+#if defined(PS5_NATIVE_APP)
+    // The ps5-opengl SDL2 build has no haptic backend, so rumble requests are
+    // accepted and ignored; the settings toggle still works, it just has no
+    // effect on this platform.
+    (void)controller;
+    (void)lowFreqMotor;
+    (void)highFreqMotor;
+    return;
+#endif
     if (controllers.size() <= controller) return;
     SDL_GameController* c = controllers[controller].second;
 

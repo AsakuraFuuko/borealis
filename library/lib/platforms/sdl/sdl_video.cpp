@@ -18,6 +18,11 @@
 #include <borealis/core/logger.hpp>
 #include <borealis/core/thread.hpp>
 #include <borealis/platforms/sdl/sdl_video.hpp>
+
+#if defined(PS5_NATIVE_APP)
+#include <cstdio>
+extern "C" void wiliwili_boot_log(const char*);
+#endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -169,14 +174,26 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
-        Logger::error("sdl: failed to initialize");
-        return;
+        fatal(std::string("sdl: failed to initialize: ") + SDL_GetError());
     }
 
     // Create window
+#if defined(PS5_NATIVE_APP)
+    // The ps5-opengl SDL2 bridge owns exactly one fixed-size EGL surface and
+    // rejects resize and high-DPI window flags.
+    Uint32 windowFlags = SDL_WINDOW_SHOWN;
+#else
     Uint32 windowFlags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
+#endif
 #ifdef BOREALIS_USE_OPENGL
-#ifdef __SWITCH__
+#if defined(PS5_NATIVE_APP)
+    // The ps5-opengl SDL2 bridge accepts exactly one GL 3.3 Core context with
+    // default flags; it presents that context through EGL.
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+#elif defined(__SWITCH__)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
@@ -241,7 +258,10 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
 #endif
     if (VideoContext::FULLSCREEN)
     {
-#ifdef __WINRT__
+#if defined(PS5_NATIVE_APP)
+        // The bridge presents fullscreen through EGL and rejects window-level
+        // fullscreen/resize flags.
+#elif defined(__WINRT__)
         windowFlags |= SDL_WINDOW_FULLSCREEN;
 #else
         windowFlags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
@@ -268,20 +288,48 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
             windowFlags);
     }
 
+#if defined(PS5_NATIVE_APP)
+    if (this->window)
+    {
+        int realisedWidth = 0, realisedHeight = 0;
+        SDL_GetWindowSize(this->window, &realisedWidth, &realisedHeight);
+        char realised[64];
+        std::snprintf(realised, sizeof(realised), "sdl: window %dx%d", realisedWidth, realisedHeight);
+        wiliwili_boot_log(realised);
+    }
+#endif
     if (!this->window)
     {
-        fatal("sdl: failed to create window");
+        fatal(std::string("sdl: failed to create window: ") + SDL_GetError());
     }
 #ifdef BOREALIS_USE_OPENGL
+#if defined(PS5_NATIVE_APP)
+    // The ps5-opengl bridge validates the requested attributes at creation
+    // time, so they are set immediately before the context is created.
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    wiliwili_boot_log("sdl: requesting 3.3 core context");
+#endif
     // Configure window
     SDL_GLContext context = SDL_GL_CreateContext(window);
-    SDL_GL_MakeCurrent(window, context);
+    if (!context)
+    {
+        fatal(std::string("sdl: failed to create OpenGL context: ") + SDL_GetError());
+    }
+    if (SDL_GL_MakeCurrent(window, context) != 0)
+    {
+        fatal(std::string("sdl: failed to make OpenGL context current: ") + SDL_GetError());
+    }
 #endif
     SDL_AddEventWatch(sdlWindowEventWatcher, window);
 #ifdef BOREALIS_USE_OPENGL
 #if !defined(__PSV__) && !defined(PS4)
     // Load OpenGL routines using glad
-    gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress);
+    if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress))
+    {
+        fatal(std::string("sdl: failed to load OpenGL functions: ") + SDL_GetError());
+    }
 #endif
 
     Logger::info("sdl: GL Vendor: {}", (const char*)glGetString(GL_VENDOR));

@@ -13,6 +13,7 @@ option(PLATFORM_ANDROID "build for Android" OFF)
 option(PLATFORM_PSV "build for psv" OFF)
 option(PLATFORM_PS4 "build for ps4" OFF)
 option(PLATFORM_SWITCH "build for switch" OFF)
+option(PLATFORM_PS5 "build for PS5" OFF)
 
 # OpenGL options
 option(USE_EGL "Using EGL instead of native GL." OFF)

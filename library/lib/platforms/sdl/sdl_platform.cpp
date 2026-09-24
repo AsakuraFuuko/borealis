@@ -62,6 +62,16 @@ SDLPlatform::SDLPlatform()
         SDL_free(base_path);
     }
 #endif
+#ifdef PS5
+    VideoContext::FULLSCREEN = true;
+#if defined(PS5_NATIVE_APP)
+    // Installed titles use the ps5-opengl SDL2 bridge, whose driver presents
+    // through EGL/AGC instead of the payload build's VideoOut path.
+    SDL_SetHint(SDL_HINT_VIDEODRIVER, "ps5-g19");
+#else
+    SDL_SetHint(SDL_HINT_VIDEODRIVER, "ps5");
+#endif
+#endif
 
     // Init sdl
     if (SDL_Init(SDL_INIT_EVENTS | SDL_INIT_TIMER) < 0)
@@ -107,6 +117,12 @@ SDLPlatform::SDLPlatform()
 
 void SDLPlatform::createWindow(std::string windowTitle, uint32_t windowWidth, uint32_t windowHeight, float windowXPos, float windowYPos)
 {
+#if defined(PS5_NATIVE_APP)
+    // The ps5-opengl SDL2 bridge owns exactly one fixed 1920x1080 EGL surface,
+    // so the window and the UI geometry share that size.
+    windowWidth  = 1920;
+    windowHeight = 1080;
+#endif
     this->videoContext = new SDLVideoContext(windowTitle, windowWidth, windowHeight, windowXPos, windowYPos);
     this->inputManager = new SDLInputManager(this->videoContext->getSDLWindow());
     this->imeManager   = new SDLImeManager(&this->otherEvent);

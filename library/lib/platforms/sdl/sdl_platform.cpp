@@ -64,7 +64,11 @@ SDLPlatform::SDLPlatform()
 #endif
 #ifdef PS5
     VideoContext::FULLSCREEN = true;
-#if defined(PS5_NATIVE_APP)
+#if defined(WILIWILI_SOFTWARE_RENDER)
+    // Software rendering renders into memory and presents through the video-out
+    // driver, the path the payload build uses.
+    SDL_SetHint(SDL_HINT_VIDEODRIVER, "ps5");
+#elif defined(PS5_NATIVE_APP)
     // Installed titles use the ps5-opengl SDL2 bridge, whose driver presents
     // through EGL/AGC instead of the payload build's VideoOut path.
     SDL_SetHint(SDL_HINT_VIDEODRIVER, "ps5-g19");

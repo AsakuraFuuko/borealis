@@ -18,6 +18,10 @@
 */
 
 #include <cstdio>
+
+struct NVGcontext;
+extern "C" void wiliwili_video_test_draw(NVGcontext *vg);
+extern "C" void wiliwili_videodec2_draw(NVGcontext *vg); /* 自管视频探针，见 wiliwili/source/utils/ffmpeg_video_test.cpp */
 #include <cstdlib>
 #include <cmath>
 #include <yoga/YGNode.h>
@@ -743,6 +747,11 @@ bool Application::handleAction(const ActionType type, const int button, const bo
     return !consumedButtons.empty();
 }
 
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+extern "C" void wiliwili_note_frame(void);
+extern "C" void wiliwili_trace_mark(int slot);
+#endif
+
 void Application::frame()
 {
     VideoContext* videoContext = Application::platform->getVideoContext();
@@ -807,10 +816,30 @@ void Application::frame()
     }
 
     // End frame
+#if defined(PS5_NATIVE_APP)
+    /* 自管视频探针的绘制钩子（见 wiliwili/source/utils/ffmpeg_video_test.cpp）。 */
+    wiliwili_video_test_draw(Application::getNVGContext());
+#endif
+
     nvgResetTransform(Application::getNVGContext()); // scale
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+    /* UI layout is finished; everything after this point is GL submission and
+     * the software rasteriser. */
+    wiliwili_trace_mark(1);
+#endif
     nvgEndFrame(Application::getNVGContext());
 
+#if defined(PS5_NATIVE_APP)
+    /* 硬解探针走 raw GL，画在 UI 之后（测试时视频可见）。 */
+    wiliwili_videodec2_draw(Application::getNVGContext());
+#endif
+
     Application::platform->getVideoContext()->endFrame();
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+    /* Frame rate checkpoint: no-op unless WILIWILI_TRACE is set (see
+     * native_shims.c), so the render loop carries no logging by default. */
+    wiliwili_note_frame();
+#endif
 }
 
 void Application::exit()

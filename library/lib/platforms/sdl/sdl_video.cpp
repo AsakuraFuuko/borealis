@@ -19,9 +19,15 @@
 #include <borealis/core/thread.hpp>
 #include <borealis/platforms/sdl/sdl_video.hpp>
 
-#if defined(PS5_NATIVE_APP)
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
 #include <cstdio>
 extern "C" void wiliwili_boot_log(const char*);
+/* Application hook: the engine drains one queued texture upload per frame so a
+ * long list of covers cannot block the render loop. */
+extern "C" void wiliwili_drain_image_uploads(void) __attribute__((weak));
+/* Frame phase marks for the WILIWILI_TRACE build (native_shims.c); no-ops
+ * otherwise. */
+extern "C" void wiliwili_trace_mark(int slot);
 #endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -172,10 +178,30 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
     PVRSRVCreateVirtualAppHint(&hint);
 #endif
 
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+    wiliwili_boot_log("sdl: SDL_Init(VIDEO) enter");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+        {
+            char line[192];
+            std::snprintf(line, sizeof(line), "sdl: SDL_Init failed: %s", SDL_GetError());
+            wiliwili_boot_log(line);
+        }
+#endif
         fatal(std::string("sdl: failed to initialize: ") + SDL_GetError());
     }
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+    {
+        char line[192];
+        std::snprintf(line, sizeof(line), "sdl: video driver=%s",
+                      SDL_GetCurrentVideoDriver() != nullptr
+                          ? SDL_GetCurrentVideoDriver()
+                          : "(none)");
+        wiliwili_boot_log(line);
+    }
+#endif
 
     // Create window
 #if defined(PS5_NATIVE_APP)
@@ -187,12 +213,17 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
 #endif
 #ifdef BOREALIS_USE_OPENGL
 #if defined(PS5_NATIVE_APP)
-    // The ps5-opengl SDL2 bridge accepts exactly one GL 3.3 Core context with
-    // default flags; it presents that context through EGL.
+    // The ps5-opengl SDL2 bridge selects its EGL configuration from the GL
+    // attributes that are set before the window is created, and it presents a
+    // double buffered surface: without SDL_GL_DOUBLEBUFFER the draw buffer is
+    // GL_FRONT, so every frame is drawn into a buffer that is never scanned out
+    // and the display stays black. The SDK's own SDL sample sets exactly this
+    // set of attributes.
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 #elif defined(__SWITCH__)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -244,10 +275,18 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+#if defined(PS5_NATIVE_APP)
+    // The ps5-opengl bridge derives its EGL configuration from these sizes.
+    // Requesting any explicit channel layout (565 as the generic branch does,
+    // or 8888) makes it pick a configuration whose channel order does not match
+    // the scanout - red and blue come out swapped - so the choice is left to the
+    // driver, exactly as the SDK's own SDL sample does.
+#else
     SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 5);
     SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 6);
     SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 5);
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
     SDL_GL_SetAttribute(SDL_GL_ACCELERATED_VISUAL, 1);
 #endif
@@ -271,7 +310,10 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
 
     if (std::isnan(windowXPos) || std::isnan(windowYPos))
     {
-        this->window = SDL_CreateWindow(windowTitle.c_str(),
+    #if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+    wiliwili_boot_log("sdl: SDL_CreateWindow enter");
+#endif
+    this->window = SDL_CreateWindow(windowTitle.c_str(),
             SDL_WINDOWPOS_UNDEFINED,
             SDL_WINDOWPOS_UNDEFINED,
             windowWidth,
@@ -309,18 +351,35 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     wiliwili_boot_log("sdl: requesting 3.3 core context");
 #endif
     // Configure window
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+    wiliwili_boot_log("sdl: SDL_GL_CreateContext enter");
+#endif
     SDL_GLContext context = SDL_GL_CreateContext(window);
     if (!context)
     {
         fatal(std::string("sdl: failed to create OpenGL context: ") + SDL_GetError());
     }
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+    wiliwili_boot_log("sdl: SDL_GL_MakeCurrent enter");
+#endif
     if (SDL_GL_MakeCurrent(window, context) != 0)
     {
         fatal(std::string("sdl: failed to make OpenGL context current: ") + SDL_GetError());
     }
+#if defined(PS5_NATIVE_APP)
+    /* Present on the vertical blank: without it the scanout alternates between
+     * a fresh and a half-written buffer, which reads as constant refreshing. */
+    if (SDL_GL_SetSwapInterval(1) != 0)
+    {
+        char line[160];
+        std::snprintf(line, sizeof(line), "sdl: swap interval 1 refused: %s", SDL_GetError());
+        wiliwili_boot_log(line);
+    }
+#endif
 #endif
     SDL_AddEventWatch(sdlWindowEventWatcher, window);
 #ifdef BOREALIS_USE_OPENGL
@@ -335,6 +394,18 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
     Logger::info("sdl: GL Vendor: {}", (const char*)glGetString(GL_VENDOR));
     Logger::info("sdl: GL Renderer: {}", (const char*)glGetString(GL_RENDERER));
     Logger::info("sdl: GL Version: {}", (const char*)glGetString(GL_VERSION));
+#if defined(PS5_NATIVE_APP)
+    /* The title has no console output, so the GL identity is recorded in the
+     * boot log: it is the first thing to check when nothing reaches the screen. */
+    {
+        char identity[192];
+        std::snprintf(identity, sizeof(identity), "sdl: gl vendor=%s renderer=%s version=%s",
+                      (const char*)glGetString(GL_VENDOR),
+                      (const char*)glGetString(GL_RENDERER),
+                      (const char*)glGetString(GL_VERSION));
+        wiliwili_boot_log(identity);
+    }
+#endif
 
     // Initialize nanovg
 #ifdef __PSV__
@@ -349,7 +420,14 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
 #elif USE_GL2
     this->nvgContext = nvgCreateGL2(NVG_STENCIL_STROKES | NVG_ANTIALIAS);
 #else
-    this->nvgContext = nvgCreateGL3(NVG_STENCIL_STROKES | NVG_ANTIALIAS);
+    #if defined(PS5_NATIVE_APP)
+    // The native GL driver charges a full draw call per nanovg path, and
+    // antialiasing adds a fringe path to every shape: it is disabled here so a
+    // frame issues roughly half as many calls.
+    this->nvgContext = nvgCreateGL3(0);
+#else
+this->nvgContext = nvgCreateGL3(NVG_STENCIL_STROKES | NVG_ANTIALIAS);
+#endif
 #endif
 #elif defined(BOREALIS_USE_D3D11)
     Logger::info("sdl: USE_D3D11");
@@ -396,6 +474,13 @@ SDLVideoContext::SDLVideoContext(std::string windowTitle, uint32_t windowWidth, 
 
 void SDLVideoContext::beginFrame()
 {
+#if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
+    wiliwili_trace_mark(0);
+#endif
+#ifdef BOREALIS_USE_OPENGL
+    /* The default draw buffer matches what the bridge flushes on swap; drawing
+     * into both buffers would rasterise every frame twice. */
+#endif
 #if defined(BOREALIS_USE_D3D11)
     D3D11_CONTEXT->beginFrame();
 #endif
@@ -404,6 +489,36 @@ void SDLVideoContext::beginFrame()
 void SDLVideoContext::endFrame()
 {
 #ifdef BOREALIS_USE_OPENGL
+#if defined(PS5_NATIVE_APP)
+    /* Pace before presenting. The bridge keeps a two deep flip pipeline and
+     * ignores the requested swap interval, so presenting faster than the panel
+     * fills that pipeline and the fourth present blocks forever. */
+    {
+        static std::chrono::steady_clock::time_point next_frame =
+            std::chrono::steady_clock::now();
+        next_frame += std::chrono::microseconds(16667);
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+        if (next_frame > now)
+        {
+            std::this_thread::sleep_for(next_frame - now);
+        }
+        else
+        {
+            next_frame = now;
+        }
+    }
+    if (wiliwili_drain_image_uploads != nullptr)
+    {
+        wiliwili_drain_image_uploads();
+    }
+    wiliwili_trace_mark(2);
+    /* Submit the frame without waiting: glFinish() serialises the whole
+     * pipeline every frame and costs more than it buys here. */
+    glFlush();
+    SDL_GL_SwapWindow(this->window);
+    wiliwili_trace_mark(3);
+    return;
+#endif
     SDL_GL_SwapWindow(this->window);
 #elif defined(BOREALIS_USE_D3D11)
     D3D11_CONTEXT->endFrame();
@@ -423,11 +538,18 @@ void SDLVideoContext::setSwapInterval(int interval)
 void SDLVideoContext::clear(NVGcolor color)
 {
 #ifdef BOREALIS_USE_OPENGL
+#if defined(PS5_NATIVE_APP) && !defined(WILIWILI_SOFTWARE_RENDER)
+    // Same reason as the nanovg output swizzle: the ps5-opengl scanout is
+    // displayed BGRA, while the software renderer's OSMesa buffer is presented
+    // by the ps5 video driver, which takes plain RGBA.
+    glClearColor(color.b, color.g, color.r, color.a);
+#else
     glClearColor(
         color.r,
         color.g,
         color.b,
         color.a);
+#endif
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 #elif defined(BOREALIS_USE_D3D11)

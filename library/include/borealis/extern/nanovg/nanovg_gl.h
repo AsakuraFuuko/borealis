@@ -685,7 +685,19 @@ static int glnvg__renderCreate(void* uptr)
 		"		result = color * innerCol;\n"
 		"	}\n"
 		"#ifdef NANOVG_GL3\n"
+#if defined(PS5_NATIVE_APP) && !defined(WILIWILI_SOFTWARE_RENDER)
+		/* The ps5-opengl scanout registers RGBA8 buffers while the console's
+		 * video-out displays BGRA, so the final colour is swizzled here. The
+		 * choice is made in C++: the shader is plain GLSL text.
+		 *
+		 * The software renderer draws into an OSMesa colour buffer that SDL's
+		 * ps5 video driver presents exactly like the payload build does, and
+		 * that path expects ordinary RGBA: swizzling here would put red and
+		 * blue on screen in the wrong places. */
+		"	outColor = result.bgra;\n"
+#else
 		"	outColor = result;\n"
+#endif
 		"#else\n"
 		"	gl_FragColor = result;\n"
 		"#endif\n"
@@ -1028,6 +1040,40 @@ static void glnvg__renderViewport(void* uptr, float width, float height, float d
 	gl->view[1] = height;
 }
 
+
+#if defined(PS5_NATIVE_APP)
+/* The native PS5 driver charges close to 0.5 ms for every draw call, and nanovg
+ * issues one per path: a frame with a few hundred shapes costs hundreds of
+ * milliseconds. glMultiDrawArrays issues the same work as a single call. */
+#define WILIWILI_MULTI_DRAW_MAX 1024
+static int wiliwili_multi_draw(GLenum mode, const GLNVGpath *paths, int count,
+                               int offset_field)
+{
+    GLint first[WILIWILI_MULTI_DRAW_MAX];
+    GLsizei sizes[WILIWILI_MULTI_DRAW_MAX];
+    int used = 0;
+
+    for (int index = 0; index < count; ++index) {
+        const GLint start = offset_field == 0 ? paths[index].fillOffset
+                                             : paths[index].strokeOffset;
+        const GLsizei size = offset_field == 0 ? paths[index].fillCount
+                                               : paths[index].strokeCount;
+        if (size <= 0)
+            continue;
+        if (used == WILIWILI_MULTI_DRAW_MAX) {
+            glMultiDrawArrays(mode, first, sizes, used);
+            used = 0;
+        }
+        first[used] = start;
+        sizes[used] = size;
+        ++used;
+    }
+    if (used > 0)
+        glMultiDrawArrays(mode, first, sizes, used);
+    return used;
+}
+#endif
+
 static void glnvg__fill(GLNVGcontext* gl, GLNVGcall* call)
 {
 	GLNVGpath* paths = &gl->paths[call->pathOffset];
@@ -1046,8 +1092,12 @@ static void glnvg__fill(GLNVGcontext* gl, GLNVGcall* call)
 	glStencilOpSeparate(GL_FRONT, GL_KEEP, GL_KEEP, GL_INCR_WRAP);
 	glStencilOpSeparate(GL_BACK, GL_KEEP, GL_KEEP, GL_DECR_WRAP);
 	glDisable(GL_CULL_FACE);
+#if defined(PS5_NATIVE_APP)
+	wiliwili_multi_draw(GL_TRIANGLE_FAN, paths, npaths, 0);
+#else
 	for (i = 0; i < npaths; i++)
 		glDrawArrays(GL_TRIANGLE_FAN, paths[i].fillOffset, paths[i].fillCount);
+#endif
 	glEnable(GL_CULL_FACE);
 
 	// Draw anti-aliased pixels
@@ -1060,8 +1110,12 @@ static void glnvg__fill(GLNVGcontext* gl, GLNVGcall* call)
 		glnvg__stencilFunc(gl, GL_EQUAL, 0x00, 0xff);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
 		// Draw fringes
+#if defined(PS5_NATIVE_APP)
+		wiliwili_multi_draw(GL_TRIANGLE_STRIP, paths, npaths, 1);
+#else
 		for (i = 0; i < npaths; i++)
 			glDrawArrays(GL_TRIANGLE_STRIP, paths[i].strokeOffset, paths[i].strokeCount);
+#endif
 	}
 
 	// Draw fill
@@ -1124,23 +1178,35 @@ static void glnvg__stroke(GLNVGcontext* gl, GLNVGcall* call)
 		glStencilOp(GL_KEEP, GL_KEEP, GL_INCR);
 		glnvg__setUniforms(gl, call->uniformOffset + gl->fragSize, call->image);
 		glnvg__checkError(gl, "stroke fill 0");
+#if defined(PS5_NATIVE_APP)
+		wiliwili_multi_draw(GL_TRIANGLE_STRIP, paths, npaths, 1);
+#else
 		for (i = 0; i < npaths; i++)
 			glDrawArrays(GL_TRIANGLE_STRIP, paths[i].strokeOffset, paths[i].strokeCount);
+#endif
 
 		// Draw anti-aliased pixels.
 		glnvg__setUniforms(gl, call->uniformOffset, call->image);
 		glnvg__stencilFunc(gl, GL_EQUAL, 0x00, 0xff);
 		glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+#if defined(PS5_NATIVE_APP)
+		wiliwili_multi_draw(GL_TRIANGLE_STRIP, paths, npaths, 1);
+#else
 		for (i = 0; i < npaths; i++)
 			glDrawArrays(GL_TRIANGLE_STRIP, paths[i].strokeOffset, paths[i].strokeCount);
+#endif
 
 		// Clear stencil buffer.
 		glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 		glnvg__stencilFunc(gl, GL_ALWAYS, 0x0, 0xff);
 		glStencilOp(GL_ZERO, GL_ZERO, GL_ZERO);
 		glnvg__checkError(gl, "stroke fill 1");
+#if defined(PS5_NATIVE_APP)
+		wiliwili_multi_draw(GL_TRIANGLE_STRIP, paths, npaths, 1);
+#else
 		for (i = 0; i < npaths; i++)
 			glDrawArrays(GL_TRIANGLE_STRIP, paths[i].strokeOffset, paths[i].strokeCount);
+#endif
 		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
 		glDisable(GL_STENCIL_TEST);
@@ -1151,8 +1217,12 @@ static void glnvg__stroke(GLNVGcontext* gl, GLNVGcall* call)
 		glnvg__setUniforms(gl, call->uniformOffset, call->image);
 		glnvg__checkError(gl, "stroke fill");
 		// Draw Strokes
+#if defined(PS5_NATIVE_APP)
+		wiliwili_multi_draw(GL_TRIANGLE_STRIP, paths, npaths, 1);
+#else
 		for (i = 0; i < npaths; i++)
 			glDrawArrays(GL_TRIANGLE_STRIP, paths[i].strokeOffset, paths[i].strokeCount);
+#endif
 	}
 }
 

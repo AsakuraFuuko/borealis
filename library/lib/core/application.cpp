@@ -771,12 +771,6 @@ void Application::frame()
     videoContext->clear(Application::getTheme().getColor("brls/clear"));
     float scaleFactor = videoContext->getScaleFactor();
 
-#if defined(PS5_NATIVE_APP)
-    /* 自管播放器的 raw GL 直画必须落在 nvg 的 UI 通道**之前**：
-     * OSD、弹幕、进度条都走 nvg，只有这样才能叠在视频画面之上。 */
-    wiliwili_ps5player_draw(Application::getNVGContext());
-#endif
-
     nvgBeginFrame(frameContext.vg, Application::windowWidth, Application::windowHeight, scaleFactor);
     nvgScale(frameContext.vg, Application::windowScale, Application::windowScale);
 
@@ -840,8 +834,9 @@ void Application::frame()
 #if defined(PS5_NATIVE_APP)
     /* 硬解探针走 raw GL，画在 UI 之后（测试时视频可见）。 */
     wiliwili_videodec2_draw(Application::getNVGContext());
-    /* 探针模式补画一遍：PS5 侧没有屏幕截图，只能让画面盖住 UI 用人眼确认。 */
-    if (wiliwili_ps5player_overlay()) wiliwili_ps5player_draw(Application::getNVGContext());
+    /* 视频在 UI 之后画、但**只画在自己的矩形里**（viewport 限定 + 16:9 letterbox）：
+     * 画在 UI 之前会被 VideoView 的不透明背景盖住（全白），画全屏又会盖住 OSD。 */
+    wiliwili_ps5player_draw(Application::getNVGContext());
 #endif
 
     Application::platform->getVideoContext()->endFrame();

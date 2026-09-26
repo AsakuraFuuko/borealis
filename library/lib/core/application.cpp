@@ -832,8 +832,11 @@ void Application::frame()
     nvgEndFrame(Application::getNVGContext());
 
 #if defined(PS5_NATIVE_APP)
-    /* 硬解探针走 raw GL，画在 UI 之后（测试时视频可见）。 */
-    wiliwili_videodec2_draw(Application::getNVGContext());
+    /* 硬解探针（WILIWILI_TEST_VDEC）走 raw GL 画在 UI 之后；播放器路径不需要它——
+     * 播放器自己会调 wiliwili_draw_nv12 上屏，而两者共用同一组全局状态
+     * （g_y_plane_ptr/g_y_width…），无条件连调会把视频画两遍并互相覆盖状态。
+     * 因此探针这一遍只在 overlay 模式（探针/测试）下执行。 */
+    if (wiliwili_ps5player_overlay()) wiliwili_videodec2_draw(Application::getNVGContext());
     /* 视频在 UI 之后画、但**只画在自己的矩形里**（viewport 限定 + 16:9 letterbox）：
      * 画在 UI 之前会被 VideoView 的不透明背景盖住（全白），画全屏又会盖住 OSD。 */
     wiliwili_ps5player_draw(Application::getNVGContext());

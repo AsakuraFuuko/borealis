@@ -22,7 +22,7 @@
 struct NVGcontext;
 extern "C" void wiliwili_video_test_draw(NVGcontext *vg);
 extern "C" void wiliwili_videodec2_draw(NVGcontext *vg);
-extern "C" void wiliwili_player_draw(NVGcontext *vg); /* 自管视频探针，见 wiliwili/source/utils/ffmpeg_video_test.cpp */
+extern "C" void wiliwili_ps5player_draw(NVGcontext *vg); /* 自管播放器（PS5 原生线），见 scripts/ps5/native/ps5_player.c */
 #include <cstdlib>
 #include <cmath>
 #include <yoga/YGNode.h>
@@ -833,7 +833,7 @@ void Application::frame()
 #if defined(PS5_NATIVE_APP)
     /* 硬解探针走 raw GL，画在 UI 之后（测试时视频可见）。 */
     wiliwili_videodec2_draw(Application::getNVGContext());
-    wiliwili_player_draw(Application::getNVGContext());
+    wiliwili_ps5player_draw(Application::getNVGContext());
 #endif
 
     Application::platform->getVideoContext()->endFrame();

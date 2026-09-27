@@ -23,6 +23,10 @@ struct NVGcontext;
 extern "C" void wiliwili_video_test_draw(NVGcontext *vg);
 extern "C" void wiliwili_videodec2_draw(NVGcontext *vg);
 extern "C" void wiliwili_ps5player_draw(NVGcontext *vg); /* 自管播放器（PS5 原生线），见 scripts/ps5/native/ps5_player.c */
+/* 帧耗时分段统计（原生线调优）：三个钩子见 scripts/ps5/native/videodec2_probe.c。 */
+extern "C" void wiliwili_frame_phase_begin(void);
+extern "C" void wiliwili_frame_phase_submit(void);
+extern "C" void wiliwili_frame_phase_swap(void);
 extern "C" int wiliwili_ps5player_overlay(void);
 #include <cstdlib>
 #include <cmath>
@@ -818,6 +822,9 @@ void Application::frame()
     }
 
     // End frame
+    /* 帧耗时分段（原生线调优）：GL 提交（nvgEndFrame + 视频上屏）与 swap 各占多少。
+     * 报告由 wiliwili_frame_phase 每 30 帧汇总一行，避免日志本身影响测量。 */
+    wiliwili_frame_phase_begin();
 #if defined(PS5_NATIVE_APP)
     /* 自管视频探针的绘制钩子（见 wiliwili/source/utils/ffmpeg_video_test.cpp）。 */
     wiliwili_video_test_draw(Application::getNVGContext());
@@ -842,7 +849,9 @@ void Application::frame()
     wiliwili_ps5player_draw(Application::getNVGContext());
 #endif
 
+    wiliwili_frame_phase_submit();
     Application::platform->getVideoContext()->endFrame();
+    wiliwili_frame_phase_swap();
 #if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
     /* Frame rate checkpoint: no-op unless WILIWILI_TRACE is set (see
      * native_shims.c), so the render loop carries no logging by default. */

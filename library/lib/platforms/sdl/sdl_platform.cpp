@@ -21,7 +21,63 @@
 #include <borealis/core/i18n.hpp>
 #include <borealis/core/logger.hpp>
 #include <borealis/platforms/sdl/sdl_platform.hpp>
-#include <unordered_map>
+#include <string>
+
+#if defined(PS5)
+extern "C" int sceSystemServiceParamGetInt(int paramId, int* value);
+#endif
+
+namespace
+{
+static std::string localeFromSDL(const SDL_Locale* locale)
+{
+    if (!locale || !locale->language)
+        return {};
+
+    const std::string language = locale->language;
+    const std::string country  = locale->country ? locale->country : "";
+    if (language == "zh" || language == "zh-CN" || language == "zh-Hans" || language == "zh-Hant")
+        return country == "TW" || country == "HK" || country == "MO" || language == "zh-Hant"
+                   ? brls::LOCALE_ZH_HANT
+                   : brls::LOCALE_ZH_HANS;
+    if (language == "ja")
+        return brls::LOCALE_JA;
+    if (language == "ko")
+        return brls::LOCALE_Ko;
+    if (language == "it")
+        return brls::LOCALE_IT;
+    if (language == "en")
+        return brls::LOCALE_EN_US;
+    return {};
+}
+
+#if defined(PS5)
+static std::string localeFromPS5System(void)
+{
+    /* SDL's PS5 branch has no locale backend and otherwise falls back to English.
+     * SystemService uses the same language parameter values as the PS4 SDK. */
+    constexpr int SYSTEM_PARAM_ID_LANG = 0;
+    constexpr int LANG_JAPANESE       = 0;
+    constexpr int LANG_ITALIAN        = 5;
+    constexpr int LANG_KOREAN         = 9;
+    constexpr int LANG_CHINESE_T      = 10;
+    constexpr int LANG_CHINESE_S      = 11;
+
+    int language = -1;
+    if (sceSystemServiceParamGetInt(SYSTEM_PARAM_ID_LANG, &language) < 0)
+        return {};
+    switch (language)
+    {
+    case LANG_JAPANESE: return brls::LOCALE_JA;
+    case LANG_ITALIAN: return brls::LOCALE_IT;
+    case LANG_KOREAN: return brls::LOCALE_Ko;
+    case LANG_CHINESE_T: return brls::LOCALE_ZH_HANT;
+    case LANG_CHINESE_S: return brls::LOCALE_ZH_HANS;
+    default: return brls::LOCALE_EN_US;
+    }
+}
+#endif
+} // namespace
 
 #if defined(IOS) || defined(TVOS)
 #include <sys/utsname.h>
@@ -83,35 +139,24 @@ SDLPlatform::SDLPlatform()
     // Platform impls
     this->audioPlayer = new NullAudioPlayer();
 
-    // override local
+    // Resolve AUTO from the console first; PS5 SDL itself has no locale backend.
     if (Platform::APP_LOCALE_DEFAULT == LOCALE_AUTO)
     {
-        SDL_Locale* locales = SDL_GetPreferredLocales();
-        if (locales != nullptr && locales->language != nullptr)
+        std::string detectedLocale;
+#if defined(PS5)
+        detectedLocale = localeFromPS5System();
+#endif
+        if (detectedLocale.empty())
         {
-            std::unordered_map<std::string, std::string> sdl2brls = {
-                { "zh_CN", LOCALE_ZH_HANS },
-                { "zh_TW", LOCALE_ZH_HANT },
-                { "ja_JP", LOCALE_JA },
-                { "ko_KR", LOCALE_Ko },
-                { "it_IT", LOCALE_IT }
-            };
-            std::string lang = std::string { locales->language };
-            if (locales->country)
+            SDL_Locale* locales = SDL_GetPreferredLocales();
+            if (locales != nullptr)
             {
-                lang += "_" + std::string { locales->country };
+                detectedLocale = localeFromSDL(locales);
+                SDL_free(locales);
             }
-            if (sdl2brls.count(lang) > 0)
-            {
-                this->locale = sdl2brls[lang];
-            }
-            else
-            {
-                this->locale = LOCALE_EN_US;
-            }
-            brls::Logger::info("Set app locale: {}", this->locale);
-            SDL_free(locales);
         }
+        this->locale = detectedLocale.empty() ? LOCALE_EN_US : detectedLocale;
+        brls::Logger::info("Set app locale: {}", this->locale);
     }
 }
 

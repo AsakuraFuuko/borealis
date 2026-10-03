@@ -198,9 +198,22 @@ elseif(PLATFORM_PS4)
     endif ()
 elseif(PLATFORM_PS5)
     find_package(SDL2 CONFIG REQUIRED)
-    list(APPEND BOREALIS_SOURCE
-            ${BOREALIS_PATH}/lib/platforms/sdl
-            ${BOREALIS_PATH}/lib/platforms/desktop)
+    list(APPEND BOREALIS_SOURCE ${BOREALIS_PATH}/lib/platforms/desktop)
+    if (PS5_NATIVE_AGC)
+        list(APPEND BOREALIS_SOURCE ${BOREALIS_PATH}/lib/platforms/sdl)
+        file(GLOB_RECURSE AGC_PLATFORM_SRC
+             "${BOREALIS_PATH}/lib/platforms/agc/*.cpp"
+             "${BOREALIS_PATH}/lib/extern/nanovg/agc/*.c")
+        list(APPEND BOREALIS_SRC
+             ${AGC_PLATFORM_SRC}
+             ${BOREALIS_PATH}/lib/extern/nanovg/nanovg_agc.cpp)
+        list(APPEND BOREALIS_INCLUDE
+             ${BOREALIS_PATH}/include/borealis/extern/nanovg/agc
+             ${BOREALIS_PATH}/lib/extern/nanovg/agc)
+        list(APPEND BRLS_PLATFORM_OPTION -DBOREALIS_USE_AGC -DEVO_TARGET_PS5)
+    else()
+        list(APPEND BOREALIS_SOURCE ${BOREALIS_PATH}/lib/platforms/sdl)
+    endif()
     list(APPEND BRLS_PLATFORM_LIBS SDL2::SDL2-static)
     list(APPEND BRLS_PLATFORM_OPTION -D__SDL2__ -DPS5 -D__PS5__ -DPROSPERO)
     set(BRLS_PLATFORM_RESOURCES_PATH "\"${BRLS_RESOURCES_DIR}/resources/\"")
@@ -304,6 +317,9 @@ endforeach (lib)
 
 # borealis 图形 driver
 set(BOREALIS_DRIVER BOREALIS_USE_OPENGL)
+if (PS5_NATIVE_AGC)
+    set(BOREALIS_DRIVER BOREALIS_USE_AGC)
+endif()
 if (BOREALIS_USE_METAL)
     set(BOREALIS_DRIVER BOREALIS_USE_METAL)
 elseif (BOREALIS_USE_D3D11)

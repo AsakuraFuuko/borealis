@@ -22,6 +22,9 @@
 #include <borealis/platforms/sdl/sdl_input.hpp>
 #include <borealis/platforms/sdl/sdl_video.hpp>
 #include <borealis/platforms/sdl/sdl_ime.hpp>
+#if defined(BOREALIS_USE_AGC)
+#include <borealis/platforms/agc/agc_video.hpp>
+#endif
 
 namespace brls
 {
@@ -55,7 +58,11 @@ class SDLPlatform : public DesktopPlatform
     bool processEvent(SDL_Event* event);
 protected:
     NullAudioPlayer* audioPlayer  = nullptr;
+#if defined(BOREALIS_USE_AGC)
+    AgcVideoContext* videoContext = nullptr;
+#else
     SDLVideoContext* videoContext = nullptr;
+#endif
     SDLInputManager* inputManager = nullptr;
     SDLImeManager* imeManager     = nullptr;
     Event<SDL_Event*> otherEvent;

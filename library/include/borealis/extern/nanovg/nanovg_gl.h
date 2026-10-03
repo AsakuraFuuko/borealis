@@ -1234,6 +1234,32 @@ static void glnvg__triangles(GLNVGcontext* gl, GLNVGcall* call)
 	glDrawArrays(GL_TRIANGLES, call->triangleOffset, call->triangleCount);
 }
 
+#if defined(PS5_NATIVE_APP)
+/* wiliwili：把 [first, first+count) 区间里的 TRIANGLES 调用合并成一次提交。
+ * ps5-opengl 每次 draw 有固定成本（重建驱动实测 ~0.19 ms/次），而弹幕这类文字每帧
+ * 上百次调用；合并后调用数直接降下来。语义不变：三角形顺序与混合顺序都没动，
+ * 只是用一次 glMultiDrawArrays 交出去（驱动侧仍按顺序执行）。 */
+static void glnvg__trianglesMerged(GLNVGcontext* gl, int first, int count)
+{
+	static GLint firsts[WILIWILI_MULTI_DRAW_MAX];
+	static GLsizei counts[WILIWILI_MULTI_DRAW_MAX];
+	int i, n = 0;
+
+	for (i = 0; i < count && n < WILIWILI_MULTI_DRAW_MAX; ++i) {
+		GLNVGcall* call = &gl->calls[first + i];
+		if (call->triangleCount <= 0)
+			continue;
+		firsts[n] = call->triangleOffset;
+		counts[n] = call->triangleCount;
+		++n;
+	}
+	if (n == 1)
+		glDrawArrays(GL_TRIANGLES, firsts[0], counts[0]);
+	else if (n > 1)
+		glMultiDrawArrays(GL_TRIANGLES, firsts, counts, n);
+}
+#endif
+
 static void glnvg__renderCancel(void* uptr) {
 	GLNVGcontext* gl = (GLNVGcontext*)uptr;
 	gl->nverts = 0;
@@ -1347,6 +1373,29 @@ static void glnvg__renderFlush(void* uptr)
 
 		for (i = 0; i < gl->ncalls; i++) {
 			GLNVGcall* call = &gl->calls[i];
+#if defined(PS5_NATIVE_APP)
+			/* wiliwili：把紧随其后的、状态完全相同的 TRIANGLES 调用并成一次 draw
+			 * （弹幕这种"每帧上百次文字调用"是主要受益者）。判据：同类型 + 同纹理
+			 * + 同混合 + uniform 块逐字节相同；不满足就停下，绝不跨越状态边界。 */
+			if (call->type == GLNVG_TRIANGLES) {
+				int last = i + 1;
+				while (last < gl->ncalls) {
+					GLNVGcall* next = &gl->calls[last];
+					if (next->type != GLNVG_TRIANGLES || next->image != call->image ||
+					    memcmp(&next->blendFunc, &call->blendFunc, sizeof(call->blendFunc)) != 0 ||
+					    memcmp((const char*)gl->uniforms + next->uniformOffset,
+					           (const char*)gl->uniforms + call->uniformOffset, (size_t)gl->fragSize) != 0)
+						break;
+					++last;
+				}
+				glnvg__blendFuncSeparate(gl, &call->blendFunc);
+				glnvg__setUniforms(gl, call->uniformOffset, call->image);
+				glnvg__trianglesMerged(gl, i, last - i);
+				glnvg__checkError(gl, "triangles merged");
+				i = last - 1; /* for 自己会 ++i */
+				continue;
+			}
+#endif
 			glnvg__blendFuncSeparate(gl,&call->blendFunc);
 			if (call->type == GLNVG_FILL)
 				glnvg__fill(gl, call);

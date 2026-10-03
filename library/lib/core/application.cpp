@@ -21,14 +21,14 @@
 
 struct NVGcontext;
 extern "C" void wiliwili_video_test_draw(NVGcontext *vg);
-extern "C" void wiliwili_videodec2_draw(NVGcontext *vg);
-extern "C" void wiliwili_ps5player_draw(NVGcontext *vg); /* 自管播放器（PS5 原生线），见 scripts/ps5/native/ps5_player.c */
-/* 帧耗时分段统计（原生线调优）：三个钩子见 scripts/ps5/native/videodec2_probe.c。 */
+/* 帧耗时分段统计（原生线调优）：四个钩子见 scripts/ps5/native/videodec2_probe.c。 */
 extern "C" void wiliwili_frame_phase_begin(void);
+extern "C" void wiliwili_frame_phase_clear(void);
+extern "C" void wiliwili_frame_phase_ui(void);
+extern "C" void wiliwili_frame_phase_video_begin(void);
+extern "C" void wiliwili_frame_phase_video_end(void);
 extern "C" void wiliwili_frame_phase_submit(void);
 extern "C" void wiliwili_frame_phase_swap(void);
-extern "C" int wiliwili_ps5player_overlay(void);
-#include <cstdlib>
 #include <cmath>
 #include <yoga/YGNode.h>
 #include <yoga/event/event.h>
@@ -762,6 +762,9 @@ void Application::frame()
 {
     VideoContext* videoContext = Application::platform->getVideoContext();
 
+    /* 帧耗时分段 T0：从 beginFrame/clear 起算（整段 UI 记录+提交）。 */
+    wiliwili_frame_phase_begin();
+
     // Frame context
     FrameContext frameContext = FrameContext();
 
@@ -822,9 +825,9 @@ void Application::frame()
     }
 
     // End frame
-    /* 帧耗时分段（原生线调优）：GL 提交（nvgEndFrame + 视频上屏）与 swap 各占多少。
+    /* 帧耗时分段（原生线调优）：UI / nvgEndFrame+叠加 / 视频上屏 / swap 各占多少。
      * 报告由 wiliwili_frame_phase 每 30 帧汇总一行，避免日志本身影响测量。 */
-    wiliwili_frame_phase_begin();
+    wiliwili_frame_phase_ui();
 #if defined(PS5_NATIVE_APP)
     /* 自管视频探针的绘制钩子（见 wiliwili/source/utils/ffmpeg_video_test.cpp）。 */
     wiliwili_video_test_draw(Application::getNVGContext());
@@ -836,18 +839,14 @@ void Application::frame()
      * the software rasteriser. */
     wiliwili_trace_mark(1);
 #endif
-    nvgEndFrame(Application::getNVGContext());
+    /* 视频必须在 UI **之前**画：它是 raw GL 的不透明四边形，画在 nvgEndFrame
+     * 之后会把矩形内的弹幕/OSD 全盖住（真机截图已确认）。清屏色 brls/clear 也在这
+     * 之前（beginFrame），所以视频不会缺底；VideoView 自身不填不透明背景，
+     * 不存在"被背景盖住变全白"的问题。 */
+    wiliwili_frame_phase_video_begin();
+    wiliwili_frame_phase_video_end();
 
-#if defined(PS5_NATIVE_APP)
-    /* 硬解探针（WILIWILI_TEST_VDEC）走 raw GL 画在 UI 之后；播放器路径不需要它——
-     * 播放器自己会调 wiliwili_draw_nv12 上屏，而两者共用同一组全局状态
-     * （g_y_plane_ptr/g_y_width…），无条件连调会把视频画两遍并互相覆盖状态。
-     * 因此探针这一遍只在 overlay 模式（探针/测试）下执行。 */
-    if (wiliwili_ps5player_overlay()) wiliwili_videodec2_draw(Application::getNVGContext());
-    /* 视频在 UI 之后画、但**只画在自己的矩形里**（viewport 限定 + 16:9 letterbox）：
-     * 画在 UI 之前会被 VideoView 的不透明背景盖住（全白），画全屏又会盖住 OSD。 */
-    wiliwili_ps5player_draw(Application::getNVGContext());
-#endif
+    nvgEndFrame(Application::getNVGContext());
 
     wiliwili_frame_phase_submit();
     Application::platform->getVideoContext()->endFrame();

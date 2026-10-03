@@ -22,12 +22,13 @@
 #if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
 #include <cstdio>
 extern "C" void wiliwili_boot_log(const char*);
-/* Application hook: the engine drains one queued texture upload per frame so a
- * long list of covers cannot block the render loop. */
-extern "C" void wiliwili_drain_image_uploads(void) __attribute__((weak));
 /* Frame phase marks for the WILIWILI_TRACE build (native_shims.c); no-ops
  * otherwise. */
 extern "C" void wiliwili_trace_mark(int slot);
+/* 帧耗时分段：beginFrame+clear 的结束点（定义在 scripts/ps5/native/videodec2_probe.c）。
+ * 必须在这里按 C 链接声明——本文件在 namespace brls 内，块作用域的裸 extern 会被
+ * 推导成 brls::wiliwili_frame_phase_clear() 而链不上定义。 */
+extern "C" void wiliwili_frame_phase_clear(void);
 #endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -507,10 +508,6 @@ void SDLVideoContext::endFrame()
             next_frame = now;
         }
     }
-    if (wiliwili_drain_image_uploads != nullptr)
-    {
-        wiliwili_drain_image_uploads();
-    }
     wiliwili_trace_mark(2);
     /* Submit the frame without waiting: glFinish() serialises the whole
      * pipeline every frame and costs more than it buys here. */
@@ -552,6 +549,11 @@ void SDLVideoContext::clear(NVGcolor color)
 #endif
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+#if defined(PS5_NATIVE_APP)
+    /* 帧耗时分段：把 beginFrame+clear 与视图树记录分开——重建驱动上 ps5_clear
+     * 一次约 5 ms（驱动自带的 [ps5-driver-cycles] 相位 4），不拆开就全算进 ui 里。 */
+    wiliwili_frame_phase_clear();
+#endif
 #elif defined(BOREALIS_USE_D3D11)
     D3D11_CONTEXT->clear(nvgRGBAf(
         color.r,

@@ -120,14 +120,15 @@ SDLPlatform::SDLPlatform()
 #endif
 #ifdef PS5
     VideoContext::FULLSCREEN = true;
-#if defined(WILIWILI_SOFTWARE_RENDER)
-    // Software rendering renders into memory and presents through the video-out
-    // driver, the path the payload build uses.
-    SDL_SetHint(SDL_HINT_VIDEODRIVER, "ps5");
-#elif defined(PS5_NATIVE_APP)
-    // Installed titles use the ps5-opengl SDL2 bridge, whose driver presents
-    // through EGL/AGC instead of the payload build's VideoOut path.
+#if defined(BOREALIS_USE_AGC)
+    SDL_SetHint(SDL_HINT_VIDEODRIVER, "dummy");
+#elif defined(PS5_NATIVE_APP) && !defined(WILIWILI_SOFTWARE_RENDER)
+    // Hardware native titles use the ps5-opengl EGL bridge (ps5-g19).
     SDL_SetHint(SDL_HINT_VIDEODRIVER, "ps5-g19");
+#elif defined(WILIWILI_SOFTWARE_RENDER)
+    // OSMesa titles render into SDL's surface and present through the upstream
+    // PS5 VideoOut backend (ps5), not the EGL/AGC bridge.
+    SDL_SetHint(SDL_HINT_VIDEODRIVER, "ps5");
 #else
     SDL_SetHint(SDL_HINT_VIDEODRIVER, "ps5");
 #endif
@@ -166,49 +167,81 @@ SDLPlatform::SDLPlatform()
 
 void SDLPlatform::createWindow(std::string windowTitle, uint32_t windowWidth, uint32_t windowHeight, float windowXPos, float windowYPos)
 {
-#if defined(PS5_NATIVE_APP)
+#if defined(BOREALIS_USE_AGC)
+    windowWidth  = 1920;
+    windowHeight = 1080;
+    Application::setWindowSize(windowWidth, windowHeight);
+    this->videoContext = new AgcVideoContext(windowWidth, windowHeight);
+    this->inputManager = new SDLInputManager(nullptr);
+#elif defined(PS5_NATIVE_APP)
     // The ps5-opengl SDL2 bridge owns exactly one fixed 1920x1080 EGL surface,
     // so the window and the UI geometry share that size.
     windowWidth  = 1920;
     windowHeight = 1080;
 #endif
+#if !defined(BOREALIS_USE_AGC)
     this->videoContext = new SDLVideoContext(windowTitle, windowWidth, windowHeight, windowXPos, windowYPos);
     this->inputManager = new SDLInputManager(this->videoContext->getSDLWindow());
-    this->imeManager   = new SDLImeManager(&this->otherEvent);
+#endif
+    this->imeManager = new SDLImeManager(&this->otherEvent);
 }
 
 void SDLPlatform::restoreWindow()
 {
+#if !defined(BOREALIS_USE_AGC)
     SDL_RestoreWindow(this->videoContext->getSDLWindow());
+#endif
 }
 
 void SDLPlatform::setWindowAlwaysOnTop(bool enable)
 {
+#if !defined(BOREALIS_USE_AGC)
     SDL_SetWindowAlwaysOnTop(this->videoContext->getSDLWindow(), enable ? SDL_TRUE : SDL_FALSE);
+#else
+    (void)enable;
+#endif
 }
 
 void SDLPlatform::setWindowSize(uint32_t windowWidth, uint32_t windowHeight)
 {
+#if !defined(BOREALIS_USE_AGC)
     if (windowWidth > 0 && windowHeight > 0) {
         SDL_SetWindowSize(this->videoContext->getSDLWindow(), windowWidth, windowHeight);
     }
+#else
+    (void)windowWidth;
+    (void)windowHeight;
+#endif
 }
 
 void SDLPlatform::setWindowSizeLimits(uint32_t windowMinWidth, uint32_t windowMinHeight, uint32_t windowMaxWidth, uint32_t windowMaxHeight)
 {
+#if !defined(BOREALIS_USE_AGC)
     if (windowMinWidth > 0 && windowMinHeight > 0)
         SDL_SetWindowMinimumSize(this->videoContext->getSDLWindow(), windowMinWidth, windowMinHeight);
     if ((windowMaxWidth > 0 && windowMaxHeight > 0) && (windowMaxWidth > windowMinWidth && windowMaxHeight > windowMinHeight))
         SDL_SetWindowMaximumSize(this->videoContext->getSDLWindow(), windowMaxWidth, windowMaxHeight);
+#else
+    (void)windowMinWidth;
+    (void)windowMinHeight;
+    (void)windowMaxWidth;
+    (void)windowMaxHeight;
+#endif
 }
 
 void SDLPlatform::setWindowPosition(int windowXPos, int windowYPos)
 {
+#if !defined(BOREALIS_USE_AGC)
     SDL_SetWindowPosition(this->videoContext->getSDLWindow(), windowXPos, windowYPos);
+#else
+    (void)windowXPos;
+    (void)windowYPos;
+#endif
 }
 
 void SDLPlatform::setWindowState(uint32_t windowWidth, uint32_t windowHeight, int windowXPos, int windowYPos)
 {
+#if !defined(BOREALIS_USE_AGC)
     if (windowWidth > 0 && windowHeight > 0)
     {
         SDL_Window* win = this->videoContext->getSDLWindow();
@@ -216,6 +249,12 @@ void SDLPlatform::setWindowState(uint32_t windowWidth, uint32_t windowHeight, in
         SDL_SetWindowSize(win, windowWidth, windowHeight);
         SDL_SetWindowPosition(win, windowXPos, windowYPos);
     }
+#else
+    (void)windowWidth;
+    (void)windowHeight;
+    (void)windowXPos;
+    (void)windowYPos;
+#endif
 }
 
 void SDLPlatform::disableScreenDimming(bool disable, const std::string& reason, const std::string& app)

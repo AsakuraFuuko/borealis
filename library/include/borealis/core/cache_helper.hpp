@@ -139,6 +139,16 @@ class LRUCache
         }
     }
 
+    /** Set an absolute limit for platforms with a fixed GPU-memory budget. */
+    void setCapacityExact(size_t c)
+    {
+        if (c < 1)
+            throw std::logic_error("Cache capacity cannot less than 1.");
+        this->capacity = c;
+        if (cacheList.size() > capacity)
+            deleteCache(cacheList.size() - capacity);
+    }
+
     /**
      * A dirty cache is not able to be hit
      * @param value

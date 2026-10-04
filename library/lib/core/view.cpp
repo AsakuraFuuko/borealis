@@ -17,6 +17,26 @@
 */
 
 #include <math.h>
+
+// 诊断（临时）：标题里只有 wiliwili_boot_log 落地到启动日志。
+extern "C" void wiliwili_boot_log(const char *message);
+/* 诊断：最近一次请求的 XML 资源名，解析失败时一并打印。
+ * 逐文件的 xml-load 行与解析前的内容快照只在 WILIWILI_XML_TRACE=1 时输出；
+ * 解析失败（xml-parse-fail）永远输出——那是真问题。 */
+#include <cstdlib>
+#include <string>
+bool wiliwili_xml_trace_enabled() {
+    static const bool enabled = std::getenv("WILIWILI_XML_TRACE") != nullptr;
+    return enabled;
+}
+static std::string &wiliwili_lastXmlName() {
+    static std::string name;
+    return name;
+}
+extern "C" void wiliwili_note_xml_name(const char *name) {
+    if (name != nullptr) wiliwili_lastXmlName() = name;
+}
+
 #ifndef _MSC_VER
 #include <cxxabi.h>
 #endif
@@ -1841,7 +1861,14 @@ View* View::createFromXMLResource(std::string name)
     }
 
 #ifdef USE_LIBROMFS
-    return View::createFromXMLString(romfs::get("xml/" + name).string());
+    // 诊断（临时，2026-10-04 崩溃排查）：定位"Invalid XML … error 8"是哪个文件、读到多少字节。
+    auto resource = romfs::get("xml/" + name);
+    wiliwili_note_xml_name(name.c_str());
+    if (wiliwili_xml_trace_enabled()) {
+        std::string line = "xml-load[view]: xml/" + name + " bytes=" + std::to_string(resource.size());
+        wiliwili_boot_log(line.c_str());
+    }
+    return View::createFromXMLString(resource.string());
 #else
     return View::createFromXMLFile(std::string(BRLS_RESOURCES) + "xml/" + name);
 #endif
@@ -1853,10 +1880,31 @@ View* View::createFromXMLString(std::string_view xml)
     tinyxml2::XMLElement* element = document->RootElement();
 
     if (!element) {
+        // 解析前快照：只在 trace 打开时输出（失败行单独走 xml-parse-fail）。
+        if (wiliwili_xml_trace_enabled()) {
+            auto sanitize = [](std::string_view part) {
+                std::string out;
+                for (char c : part) out.push_back((c >= 32 && c < 127) || (unsigned char)c >= 0x80 ? c : '.');
+                return out;
+            };
+            const auto size = xml.size();
+            const auto at   = [&](std::size_t start) {
+                if (start >= size) return std::string();
+                return sanitize(xml.substr(start, 120));
+            };
+            std::string line = "xml-parse: name=" + wiliwili_lastXmlName() + " len=" + std::to_string(size) +
+                               " strlen=" + std::to_string(::strlen(xml.data())) + " head=[" + at(0) + "]";
+            wiliwili_boot_log(line.c_str());
+        }
         tinyxml2::XMLError error = document->Parse(xml.data());
 
-        if (error != tinyxml2::XMLError::XML_SUCCESS)
+        if (error != tinyxml2::XMLError::XML_SUCCESS) {
+            // 诊断（临时）：错误行号 = 解析器认为出问题的那一行，用来和文件内容对齐。
+            std::string line = "xml-parse-fail: name=" + wiliwili_lastXmlName() + " err=" + std::to_string(error) +
+                               " line=" + std::to_string(document->ErrorLineNum()) + " len=" + std::to_string(xml.size());
+            wiliwili_boot_log(line.c_str());
             fatal("Invalid XML when creating View from XML: error " + std::to_string(error));
+        }
 
         element = document->RootElement();
 

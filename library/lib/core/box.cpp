@@ -16,6 +16,12 @@
 */
 
 #include <tinyxml2.h>
+
+// 诊断（临时）：标题里只有 wiliwili_boot_log 落地到启动日志。
+extern "C" void wiliwili_boot_log(const char *message);
+extern "C" void wiliwili_note_xml_name(const char *name);
+// 逐文件加载行只在 WILIWILI_XML_TRACE=1 时输出（定义在 view.cpp）。
+bool wiliwili_xml_trace_enabled();
 #include <yoga/YGNode.h>
 
 #include <borealis/core/application.hpp>
@@ -503,7 +509,14 @@ void Box::inflateFromXMLRes(const std::string& name)
     }
 
 #ifdef USE_LIBROMFS
-    return Box::inflateFromXMLString(romfs::get(name).string());
+    // 诊断（临时）：定位 "Invalid XML … error 8" 是哪个文件、读到多少字节。
+    auto resource = romfs::get(name);
+    wiliwili_note_xml_name(name.c_str());
+    if (wiliwili_xml_trace_enabled()) {
+        std::string line = "xml-load[box]: " + name + " bytes=" + std::to_string(resource.size());
+        wiliwili_boot_log(line.c_str());
+    }
+    return Box::inflateFromXMLString(resource.string());
 #else
     return Box::inflateFromXMLFile(std::string(BRLS_RESOURCES) + name);
 #endif

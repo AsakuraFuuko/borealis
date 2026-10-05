@@ -758,6 +758,7 @@ extern "C" void wiliwili_note_frame(void);
 extern "C" void wiliwili_trace_mark(int slot);
 #endif
 extern "C" void wiliwili_agc_m1_draw(void);
+extern "C" void wiliwili_vdec_play_frame_retire(void);
 
 void Application::frame()
 {
@@ -856,6 +857,11 @@ void Application::frame()
 
     wiliwili_frame_phase_submit();
     Application::platform->getVideoContext()->endFrame();
+#if defined(PS5_NATIVE_APP)
+    /* AgcVideoContext::endFrame waits the DCB fence; only now may M2 retire the
+     * decoder slot that supplied the staged NV12 frame. */
+    wiliwili_vdec_play_frame_retire();
+#endif
     wiliwili_frame_phase_swap();
 #if defined(PS5_NATIVE_APP) || defined(WILIWILI_SOFTWARE_RENDER)
     /* Frame rate checkpoint: no-op unless WILIWILI_TRACE is set (see

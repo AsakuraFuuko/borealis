@@ -1181,48 +1181,16 @@ int evo_agc_runtime_init(int width, int height, int hdr)
     }
 
 #ifdef EVO_AGC_HAVE_VIDEO_PIPES
+    /* M1 deliberately enables only the generated 8-bit NV12 artifact. HDR,
+     * planar and upscaler pipes stay disabled until their generated headers
+     * are imported and hardware-verified; a missing optional artifact must not
+     * make the native title fail at link time. */
     static const struct {
         int pipe_id;
         const evo_agc_shader_metadata_t *meta;
         const char *name;
     } video_pipes[] = {
-        {EVO_AGC_PIPE_VIDEO_NV12,   &video_yuv_nv12_metadata,     "video_yuv_nv12"},
-        {EVO_AGC_PIPE_VIDEO_HDR,    &video_yuv_p010_hdr_metadata, "video_yuv_p010_hdr"},
-        {EVO_AGC_PIPE_VIDEO_HLG,    &video_yuv_p010_hlg_metadata, "video_yuv_p010_hlg"},
-        /* real HDR10 output; missing ones just keep playback tone-mapped SDR */
-        {EVO_AGC_PIPE_VIDEO_HDR_PQ, &video_yuv_p010_pq_out_metadata,     "video_yuv_p010_pq_out"},
-        {EVO_AGC_PIPE_VIDEO_HLG_PQ, &video_yuv_p010_hlg_pq_out_metadata, "video_yuv_p010_hlg_pq_out"},
-        {EVO_AGC_PIPE_UI_PQ,        &ui_screen_2d_pq_out_metadata,       "ui_screen_2d_pq_out"},
-        {EVO_AGC_PIPE_NV12_HDR,     &video_yuv_nv12_hdr_metadata,        "video_yuv_nv12_hdr"},
-        {EVO_AGC_PIPE_NV12_HLG,     &video_yuv_nv12_hlg_metadata,        "video_yuv_nv12_hlg"},
-        {EVO_AGC_PIPE_NV12_HDR_PQ,  &video_yuv_nv12_pq_out_metadata,     "video_yuv_nv12_pq_out"},
-        {EVO_AGC_PIPE_NV12_HLG_PQ,  &video_yuv_nv12_hlg_pq_out_metadata, "video_yuv_nv12_hlg_pq_out"},
-        {EVO_AGC_PIPE_VIDEO_PLANAR, &video_yuv_planar_metadata,   "video_yuv_planar"},
-        /* #103 upscaler. Each is optional: a missing one makes the upscaler
-         * fall back a mode (AI -> Sharp -> Off), never fail the runtime. */
-        {EVO_AGC_PIPE_UP_EASU,      &upscale_easu_metadata,       "upscale_easu"},
-        {EVO_AGC_PIPE_UP_RCAS,      &upscale_rcas_metadata,       "upscale_rcas"},
-        {EVO_AGC_PIPE_UP_A4K_FINAL, &upscale_a4k_final_metadata,  "upscale_a4k_final"},
-        {EVO_AGC_PIPE_UP_S_CONV0 + 0, &upscale_a4k_s_conv0_metadata, "upscale_a4k_s_conv0"},
-        {EVO_AGC_PIPE_UP_S_CONV0 + 1, &upscale_a4k_s_conv1_metadata, "upscale_a4k_s_conv1"},
-        {EVO_AGC_PIPE_UP_S_CONV0 + 2, &upscale_a4k_s_conv2_metadata, "upscale_a4k_s_conv2"},
-        {EVO_AGC_PIPE_UP_S_CONV0 + 3, &upscale_a4k_s_conv3_metadata, "upscale_a4k_s_conv3"},
-        {EVO_AGC_PIPE_UP_M_CONV0 + 0, &upscale_a4k_m_conv0_metadata, "upscale_a4k_m_conv0"},
-        {EVO_AGC_PIPE_UP_M_CONV0 + 1, &upscale_a4k_m_conv1_metadata, "upscale_a4k_m_conv1"},
-        {EVO_AGC_PIPE_UP_M_CONV0 + 2, &upscale_a4k_m_conv2_metadata, "upscale_a4k_m_conv2"},
-        {EVO_AGC_PIPE_UP_M_CONV0 + 3, &upscale_a4k_m_conv3_metadata, "upscale_a4k_m_conv3"},
-        {EVO_AGC_PIPE_UP_M_CONV0 + 4, &upscale_a4k_m_conv4_metadata, "upscale_a4k_m_conv4"},
-        {EVO_AGC_PIPE_UP_M_CONV0 + 5, &upscale_a4k_m_conv5_metadata, "upscale_a4k_m_conv5"},
-        {EVO_AGC_PIPE_UP_M_CONV0 + 6, &upscale_a4k_m_conv6_metadata, "upscale_a4k_m_conv6"},
-        {EVO_AGC_PIPE_UP_M_ACC0 + 0, &upscale_a4k_m_acc0_metadata, "upscale_a4k_m_acc0"},
-        {EVO_AGC_PIPE_UP_M_ACC0 + 1, &upscale_a4k_m_acc1_metadata, "upscale_a4k_m_acc1"},
-        {EVO_AGC_PIPE_UP_M_ACC0 + 2, &upscale_a4k_m_acc2_metadata, "upscale_a4k_m_acc2"},
-        {EVO_AGC_PIPE_UP_M_ACC0 + 3, &upscale_a4k_m_acc3_metadata, "upscale_a4k_m_acc3"},
-        {EVO_AGC_PIPE_UP_M_ACC0 + 4, &upscale_a4k_m_acc4_metadata, "upscale_a4k_m_acc4"},
-        {EVO_AGC_PIPE_UP_M_ACC0 + 5, &upscale_a4k_m_acc5_metadata, "upscale_a4k_m_acc5"},
-        {EVO_AGC_PIPE_UP_M_ACC0 + 6, &upscale_a4k_m_acc6_metadata, "upscale_a4k_m_acc6"},
-        {EVO_AGC_PIPE_UP_RGB_FINAL, &upscale_a4k_rgb_final_metadata, "upscale_a4k_rgb_final"},
-#include "upscale_wide_pipes.inc"
+        {EVO_AGC_PIPE_VIDEO_NV12, &video_yuv_nv12_metadata, "video_yuv_nv12"},
     };
     for (unsigned i = 0; i < sizeof(video_pipes) / sizeof(video_pipes[0]); ++i) {
         int vrc = compile_agc_pipeline(&g_agc_dev.pipelines[video_pipes[i].pipe_id],
@@ -3439,6 +3407,11 @@ int evo_agc_blit_yuv(const uint8_t *y,  int y_pitch,
         pipe_id = (color_trc == 18) ? EVO_AGC_PIPE_NV12_HLG : EVO_AGC_PIPE_NV12_HDR;
     } else {
         pipe_id = planar ? EVO_AGC_PIPE_VIDEO_PLANAR : EVO_AGC_PIPE_VIDEO_NV12;
+    }
+    const int bound_pipe = agc_hdr_remap(pipe_id);
+    if (bound_pipe < 0 || bound_pipe >= EVO_AGC_PIPE_COUNT || !g_agc_dev.pipelines[bound_pipe].valid) {
+        evo_boot_log("agc_blit_yuv: pipeline %d unavailable", pipe_id);
+        return -1;
     }
     evo_agc_runtime_bind_pipeline(pipe_id);
     evo_agc_runtime_set_blend(EVO_AGC_BLEND_NONE);

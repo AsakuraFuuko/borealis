@@ -757,6 +757,7 @@ bool Application::handleAction(const ActionType type, const int button, const bo
 extern "C" void wiliwili_note_frame(void);
 extern "C" void wiliwili_trace_mark(int slot);
 #endif
+extern "C" void wiliwili_agc_m1_draw(void);
 
 void Application::frame()
 {
@@ -847,6 +848,11 @@ void Application::frame()
     wiliwili_frame_phase_video_end();
 
     nvgEndFrame(Application::getNVGContext());
+#if defined(PS5_NATIVE_APP)
+    /* M1 AGC probe draws after NanoVG has emitted UI, before the AGC present;
+     * it is inert unless TEST_VDEC + VDEC_AGC are both set. */
+    wiliwili_agc_m1_draw();
+#endif
 
     wiliwili_frame_phase_submit();
     Application::platform->getVideoContext()->endFrame();

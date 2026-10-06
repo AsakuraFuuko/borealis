@@ -1181,16 +1181,13 @@ int evo_agc_runtime_init(int width, int height, int hdr)
     }
 
 #ifdef EVO_AGC_HAVE_VIDEO_PIPES
-    /* M1 deliberately enables only the generated 8-bit NV12 artifact. HDR,
-     * planar and upscaler pipes stay disabled until their generated headers
-     * are imported and hardware-verified; a missing optional artifact must not
-     * make the native title fail at link time. */
     static const struct {
         int pipe_id;
         const evo_agc_shader_metadata_t *meta;
         const char *name;
     } video_pipes[] = {
         {EVO_AGC_PIPE_VIDEO_NV12, &video_yuv_nv12_metadata, "video_yuv_nv12"},
+        {EVO_AGC_PIPE_VIDEO_HDR, &video_yuv_p010_hdr_metadata, "video_yuv_p010_hdr"},
     };
     for (unsigned i = 0; i < sizeof(video_pipes) / sizeof(video_pipes[0]); ++i) {
         int vrc = compile_agc_pipeline(&g_agc_dev.pipelines[video_pipes[i].pipe_id],

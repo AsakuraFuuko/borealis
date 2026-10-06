@@ -3375,6 +3375,9 @@ int evo_agc_blit_yuv_rect(const uint8_t *y,  int y_pitch,
                           int view_mode, int ten_bit, int color_trc,
                           int is_direct, int64_t pts_us)
 {
+    /* view_* are active scanout pixels, not NanoVG content coordinates. The
+     * VideoView caller applies Application::windowScale before this raw DCB
+     * path; the A/NanoVG path applies that scale in its transform instead. */
     const int full_view = view_x == 0 && view_y == 0 && view_w == g_agc_dev.width && view_h == g_agc_dev.height;
     if (view_w <= 0 || view_h <= 0) return -1;
     if (view_x < 0) { view_w += view_x; view_x = 0; }

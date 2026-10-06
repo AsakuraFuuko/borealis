@@ -302,8 +302,17 @@ const char *evo_agc_upscale_label(void);
  * caller toasts exactly once. */
 int         evo_agc_upscale_take_downgrade(void);
 
-/* Draw the video quad. Returns 0 when the quad was emitted (and the current
- * backbuffer stamped with pts_us), -1 when the frame was rejected. */
+/* Draw the video quad. The rect variant clips and scales into a destination
+ * rectangle in scanout coordinates; the legacy entry point uses the full target. */
+int  evo_agc_blit_yuv_rect(const uint8_t *y,  int y_pitch,
+                           const uint8_t *uv, int uv_pitch,
+                           const uint8_t *u,  int u_pitch,
+                           const uint8_t *v,  int v_pitch,
+                           int coded_w, int coded_h,
+                           int disp_w, int disp_h,
+                           int view_x, int view_y, int view_w, int view_h,
+                           int view_mode, int ten_bit, int color_trc,
+                           int is_direct, int64_t pts_us);
 int  evo_agc_blit_yuv(const uint8_t *y,  int y_pitch,
                       const uint8_t *uv, int uv_pitch,
                       const uint8_t *u,  int u_pitch,

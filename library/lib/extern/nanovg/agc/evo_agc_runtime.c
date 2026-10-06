@@ -3352,13 +3352,14 @@ int evo_agc_upscale_take_downgrade(void)
 }
 
 /* The Off quad's NDC half-extents for Fit (0) / Fill (1) / Stretch (2). */
-static void agc_video_scale(int disp_w, int disp_h, int view_mode, float *sx, float *sy)
+static void agc_video_scale(int disp_w, int disp_h, int view_mode, int viewport_w, int viewport_h, float *sx,
+                             float *sy)
 {
     *sx = 1.0f;
     *sy = 1.0f;
-    if (view_mode != 2 && disp_w > 0 && disp_h > 0 && g_agc_dev.width > 0 && g_agc_dev.height > 0) {
+    if (view_mode != 2 && disp_w > 0 && disp_h > 0 && viewport_w > 0 && viewport_h > 0) {
         float va = (float)disp_w / (float)disp_h;
-        float sa = (float)g_agc_dev.width / (float)g_agc_dev.height;
+        float sa = (float)viewport_w / (float)viewport_h;
         if (view_mode == 0) { /* FIT (letterbox) */
             if (va > sa) *sy = sa / va; else *sx = va / sa;
         } else {               /* FILL (crop overflow) */
@@ -3367,15 +3368,23 @@ static void agc_video_scale(int disp_w, int disp_h, int view_mode, float *sx, fl
     }
 }
 
-int evo_agc_blit_yuv(const uint8_t *y,  int y_pitch,
-                      const uint8_t *uv, int uv_pitch,
-                      const uint8_t *u,  int u_pitch,
-                      const uint8_t *v,  int v_pitch,
-                      int coded_w, int coded_h,
-                      int disp_w, int disp_h,
-                      int view_mode, int ten_bit, int color_trc,
-                      int is_direct, int64_t pts_us)
+int evo_agc_blit_yuv_rect(const uint8_t *y,  int y_pitch,
+                          const uint8_t *uv, int uv_pitch,
+                          const uint8_t *u,  int u_pitch,
+                          const uint8_t *v,  int v_pitch,
+                          int coded_w, int coded_h,
+                          int disp_w, int disp_h,
+                          int view_x, int view_y, int view_w, int view_h,
+                          int view_mode, int ten_bit, int color_trc,
+                          int is_direct, int64_t pts_us)
 {
+    const int full_view = view_x == 0 && view_y == 0 && view_w == g_agc_dev.width && view_h == g_agc_dev.height;
+    if (view_w <= 0 || view_h <= 0) return -1;
+    if (view_x < 0) { view_w += view_x; view_x = 0; }
+    if (view_y < 0) { view_h += view_y; view_y = 0; }
+    if (view_x + view_w > g_agc_dev.width) view_w = g_agc_dev.width - view_x;
+    if (view_y + view_h > g_agc_dev.height) view_h = g_agc_dev.height - view_y;
+    if (view_w <= 0 || view_h <= 0) return -1;
     if (!g_agc_dev.initialized || !y || y_pitch <= 0 || coded_w <= 0 || coded_h <= 0)
         return -1;
     const int planar = (uv == NULL);
@@ -3417,7 +3426,7 @@ int evo_agc_blit_yuv(const uint8_t *y,  int y_pitch,
     evo_agc_runtime_set_blend(EVO_AGC_BLEND_NONE);
 
     float sx, sy;
-    agc_video_scale(disp_w, disp_h, view_mode, &sx, &sy);
+    agc_video_scale(disp_w, disp_h, view_mode, view_w, view_h, &sx, &sy);
 
     /* #103: with an upscaler engaged this pass renders the picture at source
      * size into scratch surface L0 instead, and agc_upscale_run() below takes
@@ -3426,18 +3435,18 @@ int evo_agc_blit_yuv(const uint8_t *y,  int y_pitch,
     const uint32_t src_h = (disp_h > 0 && disp_h <= coded_h) ? (uint32_t)disp_h : (uint32_t)coded_h;
     agc_up_plan_t up_plan;
     /* the upscalers are SDR-only: off for any HDR source, 8-bit ones too */
-    const int upscale = agc_upscale_plan(src_w, src_h, ten_bit || hdr_src, sx, sy, &up_plan);
+    const int upscale = full_view && agc_upscale_plan(src_w, src_h, ten_bit || hdr_src, sx, sy, &up_plan);
 
     /* 2. Fullscreen viewport and scissor */
     if (!upscale) {
-        evo_agc_writer_set_viewport(&g_agc_dev.current_cb, alloc_transient_cx(12), 0.0f, 0.0f,
-                                    (float)g_agc_dev.width, (float)g_agc_dev.height);
-        evo_agc_writer_set_scissor(&g_agc_dev.current_cb, alloc_transient_cx(2), 0, 0,
-                                   (uint32_t)g_agc_dev.width, (uint32_t)g_agc_dev.height);
-        g_agc_dev.scissor_x = 0;
-        g_agc_dev.scissor_y = 0;
-        g_agc_dev.scissor_w = g_agc_dev.width;
-        g_agc_dev.scissor_h = g_agc_dev.height;
+        evo_agc_writer_set_viewport(&g_agc_dev.current_cb, alloc_transient_cx(12), (float)view_x, (float)view_y,
+                                    (float)view_w, (float)view_h);
+        evo_agc_writer_set_scissor(&g_agc_dev.current_cb, alloc_transient_cx(2), (uint32_t)view_x,
+                                   (uint32_t)view_y, (uint32_t)(view_x + view_w), (uint32_t)(view_y + view_h));
+        g_agc_dev.scissor_x = view_x;
+        g_agc_dev.scissor_y = view_y;
+        g_agc_dev.scissor_w = view_w;
+        g_agc_dev.scissor_h = view_h;
     }
 
     /* 3. Compute VideoConstants (Crop & Aspect Scale) */
@@ -3622,4 +3631,13 @@ int evo_agc_blit_yuv(const uint8_t *y,  int y_pitch,
      * quad until the buffer it is about to draw into holds something else. */
     evo_agc_runtime_note_video_pts(pts_us);
     return 0;
+}
+
+int evo_agc_blit_yuv(const uint8_t *y, int y_pitch, const uint8_t *uv, int uv_pitch, const uint8_t *u, int u_pitch,
+                     const uint8_t *v, int v_pitch, int coded_w, int coded_h, int disp_w, int disp_h, int view_mode,
+                     int ten_bit, int color_trc, int is_direct, int64_t pts_us)
+{
+    return evo_agc_blit_yuv_rect(y, y_pitch, uv, uv_pitch, u, u_pitch, v, v_pitch, coded_w, coded_h, disp_w, disp_h,
+                                 0, 0, g_agc_dev.width, g_agc_dev.height, view_mode, ten_bit, color_trc, is_direct,
+                                 pts_us);
 }

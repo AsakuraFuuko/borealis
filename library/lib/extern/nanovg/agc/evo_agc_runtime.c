@@ -44,6 +44,22 @@ static void evo_agc_diag(const char *fmt, ...)
     printf(EVO_AGC_LOG_PREFIX "%s", line);
     va_end(ap);
 }
+static uint64_t evo_agc_now_us(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000000u + (uint64_t)now.tv_nsec / 1000u;
+}
+
+static int evo_agc_trace_timing(void)
+{
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char *value = getenv("WILIWILI_VDEC_TRACE_CLOCK");
+        enabled = value != NULL && strcmp(value, "1") == 0;
+    }
+    return enabled;
+}
 
 #define EVO_AGC_DIRECT_MEM_TYPE 12  /* SCE_KERNEL_WB_ONION */
 #define EVO_AGC_MAP_PROTECTION  0x33 /* PROT_CPU_RW | PROT_GPU_RW */
@@ -1899,6 +1915,10 @@ void evo_agc_runtime_frame_end(void)
         return;
 
     const uint32_t slot = g_agc_dev.current_slot;
+    const int trace_timing = evo_agc_trace_timing();
+    const uint64_t timing_frame_start = trace_timing ? evo_agc_now_us() : 0;
+    uint64_t timing_gpu_done = 0, timing_flip_done = 0;
+    unsigned timing_fwaits = 0;
 
     /*
      * A frame with no draws must not be presented.
@@ -2080,6 +2100,7 @@ void evo_agc_runtime_frame_end(void)
                 agc_upscale_note_gpu_time(us > 0 ? (uint64_t)us : 0u);
                 g_agc_dev.up.this_frame = 0;
             }
+            if (trace_timing) timing_gpu_done = evo_agc_now_us();
             int32_t fliprc = sceVideoOutSubmitFlip(g_agc_dev.video_handle,
                                                    g_agc_dev.active_backbuffer,
                                                    1 /* VSYNC */,
@@ -2117,6 +2138,8 @@ void evo_agc_runtime_frame_end(void)
                 g_agc_dev.flip_waits += fwaits;
                 if (fwaits >= 120u)
                     g_agc_dev.flip_timeouts++;
+                if (trace_timing) timing_flip_done = evo_agc_now_us();
+                if (trace_timing) timing_fwaits = fwaits;
             }
 
         }
@@ -2126,6 +2149,15 @@ void evo_agc_runtime_frame_end(void)
     g_agc_dev.active_backbuffer = 1 - g_agc_dev.active_backbuffer;
     g_agc_dev.current_slot = (g_agc_dev.current_slot + 1) % EVO_AGC_FRAME_SLOTS;
     g_agc_dev.frame_counter++;
+    if (trace_timing && (g_agc_dev.frame_counter % 600u) == 0u) {
+        const uint64_t timing_now = evo_agc_now_us();
+        evo_agc_diag("agc timing frame=%llu gpu_wait_us=%llu flip_wait_us=%llu total_us=%llu fwaits=%u",
+                     (unsigned long long)g_agc_dev.frame_counter,
+                     (unsigned long long)(timing_gpu_done > timing_frame_start ? timing_gpu_done - timing_frame_start : 0),
+                     (unsigned long long)(timing_flip_done > timing_gpu_done ? timing_flip_done - timing_gpu_done : 0),
+                     (unsigned long long)(timing_now > timing_frame_start ? timing_now - timing_frame_start : 0),
+                     timing_fwaits);
+    }
     g_agc_dev.frame_active = 0;
 }
 

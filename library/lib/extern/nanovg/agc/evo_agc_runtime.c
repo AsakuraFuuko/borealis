@@ -1746,6 +1746,23 @@ void evo_agc_runtime_set_scissor(int x, int y, int w, int h)
     g_agc_dev.scissor_w = w; g_agc_dev.scissor_h = h;
 }
 
+void evo_agc_runtime_restore_ui_state(void)
+{
+    if (!g_agc_dev.initialized || !g_agc_dev.frame_active)
+        return;
+    int width  = g_agc_dev.width;
+    int height = g_agc_dev.height;
+    if (g_agc_dev.current_layer_target) {
+        width  = (int)g_agc_dev.current_layer_target->width;
+        height = (int)g_agc_dev.current_layer_target->height;
+    }
+    SceAgcRegister *vp = alloc_transient_cx(12);
+    if (vp)
+        evo_agc_writer_set_viewport(&g_agc_dev.current_cb, vp, 0.0f, 0.0f, (float)width, (float)height);
+    evo_agc_runtime_set_scissor(0, 0, width, height);
+    evo_agc_runtime_set_blend(EVO_AGC_BLEND_PREMULTIPLIED);
+}
+
 void evo_agc_runtime_set_blend(int blend_mode)
 {
     if (!g_agc_dev.initialized || !g_agc_dev.frame_active)

@@ -141,6 +141,7 @@ void evo_agc_runtime_stream_fill(void *dst, uint32_t value32, size_t bytes);
 
 void evo_agc_runtime_bind_pipeline(int pipeline_id);
 void evo_agc_runtime_set_scissor(int x, int y, int w, int h);
+void evo_agc_runtime_restore_ui_state(void);
 void evo_agc_runtime_set_blend(int blend_mode);
 
 /* RmlUi clip masks, backed by the stencil buffer. Without these, border-radius

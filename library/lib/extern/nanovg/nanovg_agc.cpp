@@ -39,7 +39,31 @@ struct State
     int next_id;
     Texture* white;
     std::vector<Texture*> textures;
+    std::vector<Texture*> retired_textures;
 };
+
+static void releaseTexture(Texture* texture)
+{
+    if (!texture)
+        return;
+    evo_direct_mem_free(texture->raw);
+    delete texture;
+}
+
+static void reapRetired(State* state)
+{
+    if (!state || state->retired_textures.empty())
+        return;
+
+    /* A deleted texture may still be referenced by a submitted DCB. Wait for
+     * every frame fence before returning its direct-memory pages to the pool;
+     * otherwise the next SVG/cache allocation can reuse GPU-visible pages while
+     * the previous draw is still reading them. */
+    evo_agc_runtime_wait_idle(250);
+    for (Texture* texture : state->retired_textures)
+        releaseTexture(texture);
+    state->retired_textures.clear();
+}
 
 static uint32_t color(NVGcolor c)
 {
@@ -168,6 +192,7 @@ static Texture* createTexture(State* state, int type, int width, int height, int
 {
     if (width <= 0 || height <= 0)
         return nullptr;
+    reapRetired(state);
     auto* texture      = new Texture {};
     texture->id        = state->next_id++;
     texture->type      = type;
@@ -541,8 +566,7 @@ static int deleteTexture(void* uptr, int id)
     for (auto it = state->textures.begin(); it != state->textures.end(); ++it)
         if ((*it)->id == id)
         {
-            evo_direct_mem_free((*it)->raw);
-            delete *it;
+            state->retired_textures.push_back(*it);
             state->textures.erase(it);
             return 1;
         }
@@ -669,23 +693,25 @@ static void triangles(void* uptr, NVGpaint* p, NVGcompositeOperationState, NVGsc
     auto* state = static_cast<State*>(uptr);
     draw(state, p, s, v, n, DRAW_LIST, 0.0f);
 }
-static void flush(void*) { }
+static void flush(void* uptr) { reapRetired(static_cast<State*>(uptr)); }
 static void cancel(void*) { }
 static void destroy(void* uptr)
 {
     auto* state = static_cast<State*>(uptr);
+    /* nvgDeleteAgc runs before the platform releases the AGC runtime and its
+     * direct-memory arena. Drain outstanding DCBs before freeing texture storage. */
+    evo_agc_runtime_wait_idle(500);
     for (Texture* texture : state->textures)
-    {
-        evo_direct_mem_free(texture->raw);
-        delete texture;
-    }
+        releaseTexture(texture);
+    for (Texture* texture : state->retired_textures)
+        releaseTexture(texture);
     delete state;
 }
 }
 
 NVGcontext* nvgCreateAgc(int width, int height)
 {
-    auto* state = new State { width, height, 1, nullptr, {} };
+    auto* state = new State { width, height, 1, nullptr, {}, {} };
     NVGparams params {};
     params.userPtr = state;
     /* Generate fringe geometry here so convex fills and strokes can receive

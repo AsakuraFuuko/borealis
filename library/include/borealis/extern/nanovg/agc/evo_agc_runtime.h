@@ -115,6 +115,11 @@ void evo_agc_runtime_shutdown(void);
  * Used by shutdown, and by the soft close, which parks the app with the GPU
  * quiescent so the switcher can reap it without work in flight. */
 void evo_agc_runtime_wait_idle(unsigned timeout_ms);
+
+/* Returns 1 only when every outstanding submit retired before the deadline. Unlike
+ * evo_agc_runtime_wait_idle it never discards fence expectations, so a timed-out
+ * probe can be retried instead of making later drains skip in-flight work. */
+int evo_agc_runtime_is_idle(unsigned timeout_ms);
 int  evo_agc_runtime_is_active(void);
 
 void evo_agc_runtime_frame_begin(void);

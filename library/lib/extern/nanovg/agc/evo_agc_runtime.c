@@ -1423,12 +1423,13 @@ cleanup_fail:
  * into a hang on exit. Past the deadline we give up and release anyway, which
  * is no worse than the behaviour this replaces.
  */
-static void agc_wait_gpu_idle(unsigned timeout_ms)
+static int agc_wait_gpu_idle(unsigned timeout_ms)
 {
     if (!g_agc_dev.initialized)
-        return;
+        return 1;
 
-    int waited_any = 0;
+    int all_idle    = 1;
+    int waited_any  = 0;
     for (int slot = 0; slot < EVO_AGC_FRAME_SLOTS; ++slot) {
         if (!g_agc_dev.fence_expect[slot] || !g_agc_dev.fences[slot])
             continue;
@@ -1442,23 +1443,30 @@ static void agc_wait_gpu_idle(unsigned timeout_ms)
             sceKernelUsleep(1000);
         }
 
-        evo_boot_log("agc shutdown: slot=%d %s after %ums (fence=%u expect=%u)",
-                     slot, waited >= timeout_ms ? "STILL BUSY - releasing anyway"
-                                                : "idle",
-                     waited,
+        const int idle = *g_agc_dev.fences[slot] == g_agc_dev.fence_expect[slot];
+        if (!idle)
+            all_idle = 0;
+        evo_boot_log("agc drain: slot=%d %s after %ums (fence=%u expect=%u)",
+                     slot, idle ? "idle" : "STILL BUSY", waited,
                      (unsigned)*g_agc_dev.fences[slot],
                      (unsigned)g_agc_dev.fence_expect[slot]);
+        /* Forget the expectation even on a timeout. A frame that was prepared but never
+         * submitted leaves an expectation the GPU will never write, and keeping it would
+         * make every later drain (including frame_begin's own 2s wait) stall forever.
+         * Callers that gate a free on the result use the return value to retry instead. */
         g_agc_dev.fence_expect[slot] = 0;
     }
     if (!waited_any)
         evo_boot_log("agc drain: no submits outstanding");
     evo_boot_log_flush();
+    return all_idle;
 }
 
-void evo_agc_runtime_wait_idle(unsigned timeout_ms)
-{
-    agc_wait_gpu_idle(timeout_ms);
-}
+void evo_agc_runtime_wait_idle(unsigned timeout_ms) { agc_wait_gpu_idle(timeout_ms); }
+
+/* Non-destructive variant: never drops fence expectations, so callers that gate a
+ * free on the result can retry later instead of poisoning the drain bookkeeping. */
+int evo_agc_runtime_is_idle(unsigned timeout_ms) { return agc_wait_gpu_idle(timeout_ms); }
 
 void evo_agc_runtime_shutdown(void)
 {

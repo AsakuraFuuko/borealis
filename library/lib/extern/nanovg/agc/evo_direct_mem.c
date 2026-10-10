@@ -239,8 +239,14 @@ void *evo_direct_mem_alloc(size_t bytes)
     }
 
     pthread_mutex_unlock(&g_direct_pool.lock);
-    /* Direct pool exhausted; graceful fallback to system allocator */
-    return malloc(bytes);
+    /* NEVER fall back to the CPU heap here: callers hand this memory to the GPU, and a
+     * heap pointer is not GPU-mapped, so the first blit that reads it raises an async
+     * page fault that kills the title. Report exhaustion instead and let the caller
+     * skip the draw - a missing thumbnail beats a crash. */
+    evo_boot_log("direct pool exhausted: %zu bytes requested (used=%zu/%zu peak=%zu)",
+                 bytes, (size_t)g_direct_pool.allocated_size, (size_t)g_direct_pool.total_size,
+                 (size_t)g_direct_pool.peak_size);
+    return NULL;
 }
 
 void *evo_direct_mem_calloc(size_t count, size_t size)

@@ -31,6 +31,7 @@ struct Texture
     void* raw;
     uint8_t* pixels;
     uint32_t descriptor[EVO_AGC_COMBINED_DESCRIPTOR_DWORDS];
+    unsigned retired_at; /* frame_seq when this texture was deleted */
 };
 struct State
 {
@@ -38,6 +39,7 @@ struct State
     int height;
     int next_id;
     Texture* white;
+    unsigned frame_seq; /* bumped once per frame; ages retired textures */
     std::vector<Texture*> textures;
     std::vector<Texture*> retired_textures;
 };
@@ -50,19 +52,33 @@ static void releaseTexture(Texture* texture)
     delete texture;
 }
 
+/* Ticks a deleted texture is held before its pages go back to the pool. Both the
+ * viewport and flush hooks tick, so this is ~2 per frame - 8 ticks is roughly four
+ * frames, comfortably past the three frame slots AGC can have in flight. */
+static constexpr unsigned RETIRE_FRAMES = 8;
+
 static void reapRetired(State* state)
 {
     if (!state || state->retired_textures.empty())
         return;
 
-    /* A deleted texture may still be referenced by a submitted DCB. Wait for
-     * every frame fence before returning its direct-memory pages to the pool;
-     * otherwise the next SVG/cache allocation can reuse GPU-visible pages while
-     * the previous draw is still reading them. */
-    evo_agc_runtime_wait_idle(250);
-    for (Texture* texture : state->retired_textures)
-        releaseTexture(texture);
-    state->retired_textures.clear();
+    /* Age-based on purpose. An earlier revision gated this on an AGC fence probe, but a
+     * slot whose frame was prepared and then discarded has an expectation the GPU never
+     * writes, so the probe timed out forever and nothing was ever reclaimed - the
+     * direct-memory pool filled up and the allocator fell back to the CPU heap, which
+     * the GPU cannot read (async page fault, title killed). Frame counting cannot
+     * deadlock and still holds each texture well past its last submitted use. */
+    std::vector<Texture*>& retired = state->retired_textures;
+    const unsigned now             = state->frame_seq;
+    size_t keep                    = 0;
+    for (size_t i = 0; i < retired.size(); ++i)
+    {
+        if (now - retired[i]->retired_at >= RETIRE_FRAMES)
+            releaseTexture(retired[i]);
+        else
+            retired[keep++] = retired[i];
+    }
+    retired.resize(keep);
 }
 
 static uint32_t color(NVGcolor c)
@@ -192,7 +208,9 @@ static Texture* createTexture(State* state, int type, int width, int height, int
 {
     if (width <= 0 || height <= 0)
         return nullptr;
-    reapRetired(state);
+    /* No reclamation here: texture creation can run off the render thread, and
+     * freeing retired pages must only happen on the thread that submits frames
+     * (see reapRetired/flush). */
     auto* texture      = new Texture {};
     texture->id        = state->next_id++;
     texture->type      = type;
@@ -566,6 +584,7 @@ static int deleteTexture(void* uptr, int id)
     for (auto it = state->textures.begin(); it != state->textures.end(); ++it)
         if ((*it)->id == id)
         {
+            (*it)->retired_at = state->frame_seq;
             state->retired_textures.push_back(*it);
             state->textures.erase(it);
             return 1;
@@ -635,6 +654,10 @@ static void viewport(void* uptr, float w, float h, float)
     auto* state   = static_cast<State*>(uptr);
     state->width  = static_cast<int>(w);
     state->height = static_cast<int>(h);
+    /* nvgBeginFrame lands here, so this is the per-frame tick that ages retired
+     * textures; reaping here also means it happens even if renderFlush is not called. */
+    ++state->frame_seq;
+    reapRetired(state);
 }
 static void fill(void* uptr, NVGpaint* p, NVGcompositeOperationState,
     NVGscissor* s, float fringe, const float*, const NVGpath* paths, int n)
@@ -693,7 +716,12 @@ static void triangles(void* uptr, NVGpaint* p, NVGcompositeOperationState, NVGsc
     auto* state = static_cast<State*>(uptr);
     draw(state, p, s, v, n, DRAW_LIST, 0.0f);
 }
-static void flush(void* uptr) { reapRetired(static_cast<State*>(uptr)); }
+static void flush(void* uptr)
+{
+    auto* state = static_cast<State*>(uptr);
+    ++state->frame_seq;
+    reapRetired(state);
+}
 static void cancel(void*) { }
 static void destroy(void* uptr)
 {

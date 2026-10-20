@@ -103,9 +103,11 @@ int evo_direct_mem_init(size_t pool_size_bytes)
      * flexible-memory heap that the 4K decode pools contend for). Each step
      * still leaves the 1080p working set entirely in-slab. */
     {
-        size_t try_sizes[4];
+        size_t try_sizes[5];
         int n = 0;
         try_sizes[n++] = pool_size_bytes;
+        if (pool_size_bytes > (size_t)192 * 1024 * 1024)
+            try_sizes[n++] = (size_t)192 * 1024 * 1024;
         if (pool_size_bytes > (size_t)128 * 1024 * 1024)
             try_sizes[n++] = (size_t)128 * 1024 * 1024;
         if (pool_size_bytes > (size_t)96 * 1024 * 1024)
@@ -238,14 +240,27 @@ void *evo_direct_mem_alloc(size_t bytes)
         curr = curr->next;
     }
 
+    /* The largest single free run, not the total: a pool with 13 MB free split
+     * into 1 MB holes cannot back an 8.5 MB frame surface, and that difference
+     * decides whether the caller must ask for less or the pool must grow. */
+    size_t largest_free = 0;
+    for (mem_chunk_header_t* chunk = g_direct_pool.first_chunk; chunk; chunk = chunk->next)
+        if (chunk->is_free && chunk->size > largest_free)
+            largest_free = chunk->size;
+    const size_t used  = g_direct_pool.allocated_size;
+    const size_t total = g_direct_pool.total_size;
+    const size_t peak  = g_direct_pool.peak_size;
     pthread_mutex_unlock(&g_direct_pool.lock);
     /* NEVER fall back to the CPU heap here: callers hand this memory to the GPU, and a
      * heap pointer is not GPU-mapped, so the first blit that reads it raises an async
      * page fault that kills the title. Report exhaustion instead and let the caller
      * skip the draw - a missing thumbnail beats a crash. */
     evo_boot_log("direct pool exhausted: %zu bytes requested (used=%zu/%zu peak=%zu)",
-                 bytes, (size_t)g_direct_pool.allocated_size, (size_t)g_direct_pool.total_size,
-                 (size_t)g_direct_pool.peak_size);
+        bytes, used, total, peak);
+    /* evo_boot_log compiles out of the native title (EVO_APP_MODULE is not
+     * defined there); stdout is what reaches the title log. */
+    printf("EVO direct_mem: exhausted request=%zu largest_free=%zu used=%zu/%zu peak=%zu\n",
+        bytes, largest_free, used, total, peak);
     return NULL;
 }
 

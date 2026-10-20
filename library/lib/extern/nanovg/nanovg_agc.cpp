@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <vector>
@@ -222,12 +223,19 @@ static Texture* createTexture(State* state, int type, int width, int height, int
     texture->raw       = evo_direct_mem_alloc(bytes + 255u);
     if (!texture->raw)
     {
+        /* A silent nullptr here is how a fullscreen video surface turns into a
+         * blank screen: NanoVG keeps image id 0, draws the 1x1 white fallback
+         * texture into the video rect, and the player shows flat grey. Name the
+         * failure instead of leaving the caller to decode surface=0. */
+        std::printf("EVO tex: alloc failed %dx%d bytes=%zu (direct pool exhausted)\n",
+            width, height, bytes + 255u);
         delete texture;
         return nullptr;
     }
     texture->pixels = reinterpret_cast<uint8_t*>((reinterpret_cast<uintptr_t>(texture->raw) + 255u) & ~uintptr_t(255u));
     if (!uploadTexture(texture, data))
     {
+        std::printf("EVO tex: upload failed %dx%d pitch=%u\n", width, height, texture->pitch);
         evo_direct_mem_free(texture->raw);
         delete texture;
         return nullptr;

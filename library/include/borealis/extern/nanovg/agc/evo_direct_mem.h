@@ -19,10 +19,14 @@ extern "C" {
  * direct-memory pool. The previous 64 MiB budget was exhausted by the home
  * thumbnails plus one video: the allocator then fell back to the flexible
  * heap, and the next C++ view allocation hit operator new's failure trap.
- * 128 MiB remains a bounded reservation while keeping these large buffers off
- * the application heap.
+ * 128 MiB then proved too tight for the A-route fullscreen player: the
+ * 1920x1080 RGBA software video surface needs one contiguous 8.6 MiB block
+ * while cover textures already hold ~120 MiB, and the failed creation made
+ * NanoVG paint its 1x1 white fallback across the whole video rect (blank
+ * fullscreen). The console reports 12 GiB of direct memory, so 256 MiB is
+ * still a bounded reservation while leaving room for that surface.
  */
-#define EVO_DIRECT_MEM_POOL_BYTES ((size_t)128 * 1024 * 1024)
+#define EVO_DIRECT_MEM_POOL_BYTES ((size_t)256 * 1024 * 1024)
 
 typedef struct {
     size_t total_bytes;

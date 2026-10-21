@@ -14,6 +14,7 @@
     limitations under the License.
 */
 
+#include <borealis/core/perf_stats.hpp>
 #include <borealis/views/bottom_bar.hpp>
 #include <chrono>
 #include <ctime>
@@ -122,15 +123,18 @@ void BottomBar::updateText()
     ss << std::put_time(&tm, "%H:%M:%S");
     if (ss.str() != bottomText)
     {
-        bottomText = ss.str();
+        bottomText       = ss.str();
+        std::string text = bottomText;
         if (Application::getFPSStatus())
         {
-            time->setText(bottomText + " | FPS:" + std::to_string(Application::getFPS()));
+            text += " | FPS:" + std::to_string(Application::getFPS());
+
+            /* Same 1 Hz cadence as the clock: the sampler caches its snapshot. */
+            std::string memory = formatMemoryStats(getMemoryStats());
+            if (!memory.empty())
+                text += " | " + memory;
         }
-        else
-        {
-            time->setText(bottomText);
-        }
+        time->setText(text);
     }
 }
 

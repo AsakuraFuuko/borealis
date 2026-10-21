@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <iterator>
 #include <stdexcept>
 
 #include "borealis/core/singleton.hpp"
@@ -35,9 +36,13 @@ struct Node
     /// Reference count, 1 for each cache hit
     size_t count = 1;
 
-    Node(K k, T v)
+    /// Bytes this entry occupies; 0 when the owner does not account for it.
+    size_t bytes = 0;
+
+    Node(K k, T v, size_t b = 0)
         : key(k)
         , value(v)
+        , bytes(b)
     {
     }
 };
@@ -80,24 +85,25 @@ class LRUCache
         return cacheMap[key]->value;
     }
 
-    void set(K key, T value)
+    void set(K key, T value) { set(key, value, 0); }
+
+    void set(K key, T value, size_t bytes)
     {
         if (isCacheHit(key))
         {
             throw std::logic_error("Can not cache the same key twice.");
         }
 
-        // Check capacity limits
-        if (cacheList.size() >= capacity)
-        {
-            deleteCache(cacheList.size() - capacity);
-        }
-        // Add new cache
-        cacheList.push_front(Node<K, T>(key, value));
+        // Add new cache, then evict from the oldest end. The new entry sits at
+        // the front and is never the victim of its own insertion.
+        cacheList.push_front(Node<K, T>(key, value, bytes));
+        totalBytes += bytes;
 
         // Update the values of two maps
         cacheMap[key]                  = cacheList.begin();
         valueMap[cacheMap[key]->value] = cacheList.begin();
+
+        reclaim();
     }
 
     /**
@@ -109,7 +115,14 @@ class LRUCache
         {
             return;
         }
-        valueMap[value]->count--;
+        Node<K, T>& node = *valueMap[value];
+        if (node.count > 0)
+            node.count--;
+        // A cell that just scrolled out releases its reference here. When the
+        // byte budget is over, drop it (and any older entries) right away
+        // instead of waiting for the next insertion.
+        if (node.count == 0 && overLimit())
+            reclaim();
     }
 
     /**
@@ -133,10 +146,7 @@ class LRUCache
         // The setting standard of the DEFAULT_CAPACITY should be the upper limit of the number of all pictures.
         c += DEFAULT_CAPACITY;
         this->capacity = c;
-        if (cacheList.size() > capacity)
-        {
-            deleteCache(cacheList.size() - capacity);
-        }
+        reclaim();
     }
 
     /** Set an absolute limit for platforms with a fixed GPU-memory budget. */
@@ -145,9 +155,25 @@ class LRUCache
         if (c < 1)
             throw std::logic_error("Cache capacity cannot less than 1.");
         this->capacity = c;
-        if (cacheList.size() > capacity)
-            deleteCache(cacheList.size() - capacity);
+        reclaim();
     }
+
+    /**
+     * Upper bound on the bytes held by unreferenced entries.
+     * Referenced entries are never evicted, so the real footprint can exceed
+     * this while a page is on screen; 0 disables the byte limit.
+     */
+    void setCapacityBytes(size_t bytes)
+    {
+        this->capacityBytes = bytes;
+        reclaim();
+    }
+
+    size_t getCapacityBytes() const { return capacityBytes; }
+
+    size_t getTotalBytes() const { return totalBytes; }
+
+    size_t getSize() const { return cacheList.size(); }
 
     /**
      * A dirty cache is not able to be hit
@@ -195,39 +221,55 @@ class LRUCache
     }
 
   private:
-    size_t capacity = 1;
+    size_t capacity      = 1;
+    size_t capacityBytes = 0;
+    size_t totalBytes    = 0;
     T defaultValue;
     std::list<Node<K, T>> cacheList;
     std::unordered_map<K, CacheIter> cacheMap;
     std::unordered_map<T, CacheIter> valueMap;
 
-    /**
-     * Delete N caches from back to front
-     * 1. Delete only the cache with reference count 0
-     * 2. If the deletion is successful, 0 is returned; otherwise,
-     * the returned number represents the quantity that has not been deleted
-     */
-    size_t deleteCache(size_t num)
+    bool overLimit() const
     {
-        // todo: The current data structure will increase the complexity of each
-        //  new cache from O(1) to O(N) after the cache is full.
-        if (num <= 0)
-            return 0;
+        if (cacheList.size() > capacity)
+            return true;
+        return capacityBytes != 0 && totalBytes > capacityBytes;
+    }
+
+    /**
+     * Drop the least recently used entry with a zero reference count.
+     * The front of the list (the entry inserted or hit last) is protected so a
+     * freshly added texture is never evicted by its own insertion.
+     * Entries still referenced by a visible view are skipped: they are exactly
+     * the ones the screen needs.
+     */
+    bool evictOne()
+    {
+        if (cacheList.size() <= 1)
+            return false;
         auto vg = brls::Application::getNVGContext();
-        for (auto i = cacheList.rbegin(); i != cacheList.rend(); i++)
+        for (auto i = cacheList.rbegin(); i != cacheList.rend(); ++i)
         {
-            if (i->count <= 0)
-            {
-                num--;
-                nvgDeleteImage(vg, i->value);
-                cacheMap.erase(i->key);
-                valueMap.erase(i->value);
-                cacheList.erase(std::next(i).base());
-                if (num == 0)
-                    break;
-            }
+            auto item = std::prev(i.base());
+            if (item == cacheList.begin())
+                break;
+            if (item->count > 0)
+                continue;
+            totalBytes -= item->bytes;
+            nvgDeleteImage(vg, item->value);
+            cacheMap.erase(item->key);
+            valueMap.erase(item->value);
+            cacheList.erase(item);
+            return true;
         }
-        return num;
+        return false;
+    }
+
+    void reclaim()
+    {
+        while (overLimit() && evictOne())
+        {
+        }
     }
 
     bool isExisted(K key) { return cacheMap.find(key) != cacheMap.end(); }
@@ -258,13 +300,37 @@ class TextureCache : public Singleton<TextureCache>
     int getCache(const std::string& key) { return cache.get(key); }
 
     /**
-     * Add cache
+     * Add cache. The texture's byte size is read back from NanoVG so the byte
+     * budget reflects what the GPU backend actually allocated.
      */
     void addCache(const std::string& key, size_t texture)
     {
         if (texture <= 0)
             return;
-        cache.set(key, texture);
+        cache.set(key, texture, textureBytes(texture));
+    }
+
+    /**
+     * Cap the memory held by cached textures. Referenced textures (those a
+     * visible view still draws) are never evicted; everything else is dropped
+     * in LRU order once the cap is exceeded.
+     */
+    void setBudgetBytes(size_t bytes) { cache.setCapacityBytes(bytes); }
+
+    size_t getTotalBytes() const { return cache.getTotalBytes(); }
+
+    size_t getSize() const { return cache.getSize(); }
+
+    static size_t textureBytes(size_t texture)
+    {
+        if (texture <= 0)
+            return 0;
+        int width = 0, height = 0;
+        nvgImageSize(brls::Application::getNVGContext(), (int)texture, &width, &height);
+        if (width <= 0 || height <= 0)
+            return 0;
+        // All cached textures are RGBA (covers, bitmaps, SVG rasters).
+        return (size_t)width * (size_t)height * 4;
     }
 
     /**
